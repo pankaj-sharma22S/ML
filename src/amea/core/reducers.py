@@ -81,6 +81,7 @@ COMPONENT_PERMISSIONS: Dict[str, List[str]] = {
     "JudgeAgent": ["best_candidate", "judge_decision", "new_audit_reports", "target_phase"],
     "ImprovementPlanner": ["new_experiments", "new_gaps", "target_phase"],
     "CodeGenerator": ["code_artifacts", "target_phase"],
+    "CodeSynthesisAgent": ["code_artifacts", "target_phase"],
     "CodeExecutor": ["execution_result", "target_phase", "termination_reason", "is_terminal"],
     "CodeRepairLoop": ["code_artifacts", "execution_result", "target_phase"],
     "Finalizer": ["final_report", "termination_reason", "is_terminal", "target_phase"],

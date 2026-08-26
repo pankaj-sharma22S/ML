@@ -370,80 +370,40 @@ class OrchestratorNodes:
         return apply_state_patch(state, patch)
 
     def build_node(self, state: GlobalState) -> GlobalState:
-        """Synthesize modular production Python code files."""
-        best = state.best_candidate
-        spec = state.task_spec
-        data_path = Path(state.data_profile.dataset_path).as_posix() if state.data_profile else "data.csv"
+        """Synthesize modular production Python code files via CodeSynthesisAgent."""
+        if not state.best_candidate:
+            patch = StatePatch(
+                author_component="Orchestrator",
+                target_phase=LifecyclePhase.TERMINATED,
+                termination_reason="No selected best model candidate available for code synthesis.",
+                is_terminal=True,
+            )
+            return apply_state_patch(state, patch)
 
-        if best and best.model_family == "RandomForest":
-            model_class = "RandomForestClassifier()" if spec.task_type.value == "binary_classification" else "RandomForestRegressor()"
-        else:
-            model_class = "LogisticRegression()" if spec.task_type.value == "binary_classification" else "Ridge()"
+        from amea.code_synthesis.agent import CodeSynthesisAgent
+        from amea.code_synthesis.models import CodeSynthesisContext
 
-        code_files = {
-            "data_loader.py": f'''"""Data loader module for {spec.task_type.value}."""
-import pandas as pd
+        agent = CodeSynthesisAgent()
+        context = CodeSynthesisContext(
+            task_spec=state.task_spec,
+            data_profile=state.data_profile,
+            eda_report=None,
+            cleaned_data_artifact=None,
+            strategy_plan=None,
+            best_candidate=state.best_candidate,
+            judge_decision=state.judge_decision,
+        )
 
-def load_data(file_path: str = "{data_path}"):
-    df = pd.read_csv(file_path)
-    target_col = "{spec.target_column}"
-    X = df.drop(columns=[target_col])
-    y = df[target_col]
-    return X, y
-''',
-            "train.py": f'''"""Training module synthesized by AMEA."""
-import json
-import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score, accuracy_score, mean_squared_error
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.linear_model import LogisticRegression, Ridge
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import Pipeline
-from data_loader import load_data
-
-def train_pipeline():
-    X, y = load_data()
-    # Preprocess numeric features
-    numeric_cols = X.select_dtypes(include=[np.number]).columns
-    X_num = X[numeric_cols]
-    
-    X_train, X_test, y_train, y_test = train_test_split(X_num, y, test_size=0.2, random_state={spec.random_seed})
-    
-    pipeline = Pipeline([
-        ('imputer', SimpleImputer(strategy='median')),
-        ('scaler', StandardScaler()),
-        ('model', {model_class})
-    ])
-    
-    pipeline.fit(X_train, y_train)
-    preds = pipeline.predict(X_test)
-    
-    metric_val = float(accuracy_score(y_test, preds))
-    metrics = {{"{spec.primary_metric}": metric_val}}
-    print(f"__AMEA_METRICS__={{json.dumps(metrics)}}")
-    return pipeline, metrics
-
-if __name__ == "__main__":
-    train_pipeline()
-''',
-            "inference.py": '''"""Inference serving module."""
-import pandas as pd
-
-def predict(model, input_df: pd.DataFrame):
-    return model.predict(input_df)
-'''
-        }
+        generated = agent.synthesize(context)
 
         artifacts = GeneratedCodeArtifacts(
-            files=code_files,
+            files=generated.files,
             entrypoint="train.py",
             target_environment="python",
         )
 
         patch = StatePatch(
-            author_component="CodeGenerator",
+            author_component="CodeSynthesisAgent",
             code_artifacts=artifacts,
             target_phase=LifecyclePhase.VERIFY,
         )
