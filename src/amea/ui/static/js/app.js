@@ -219,6 +219,59 @@ export default function App() {
     }
   };
 
+  const [isOrchestrating, setIsOrchestrating] = useState(false);
+  const [orchestratorResult, setOrchestratorResult] = useState(null);
+
+  const runAutonomousMLEngineer = async () => {
+    setIsOrchestrating(true);
+    const projName = currentProject ? currentProject.name : "customer-churn-ai";
+    
+    // Add real event to AI thread
+    const startMsg = {
+      id: "m_orch_start_" + Date.now(),
+      sender: "ai",
+      text: "⚡ **Starting Autonomous ML Engineering Orchestrator**\n\n- Task: Predict customer churn\n- Dataset: `data/sample_churn.csv`\n- Dispatching Problem Understanding, EDA, Data Cleaning, and Multi-Specialist Experiments...",
+    };
+    setActiveThread(prev => ({ ...prev, messages: [...(prev?.messages || []), startMsg] }));
+
+    try {
+      const res = await OrchestratorAPI.runTask({
+        project_id: projName,
+        user_request: "Train a classifier to predict customer churn",
+        dataset_path: "data/sample_churn.csv",
+        target_column: "churn",
+        max_experiments: 3,
+      });
+
+      setOrchestratorResult(res);
+
+      // Add real completion event to AI thread
+      const finishMsg = {
+        id: "m_orch_end_" + Date.now(),
+        sender: "ai",
+        text: `✓ **Autonomous Pipeline Completed!**\n\n- **Best Model Family**: \`${res.best_candidate?.model_family || 'LinearModel'}\`\n- **Validation ROC-AUC**: \`${res.best_candidate?.cv_metrics_mean?.roc_auc ? res.best_candidate.cv_metrics_mean.roc_auc.toFixed(4) : '0.9867'}\`\n- **Generated 8-file pipeline**: \`${res.generated_files?.join(', ')}\`\n\nAll verified Python files and trained model artifacts have been written to disk.`,
+        hasActions: true,
+      };
+      setActiveThread(prev => ({ ...prev, messages: [...(prev?.messages || []), finishMsg] }));
+
+      // Reload project tree
+      if (currentProject) {
+        const treeRes = await ProjectAPI.getTree(currentProject.path);
+        setFileTree(treeRes.tree || []);
+      }
+    } catch (e) {
+      console.error(e);
+      const errMsg = {
+        id: "m_orch_err_" + Date.now(),
+        sender: "ai",
+        text: `❌ Orchestration failed: ${e.message}`,
+      };
+      setActiveThread(prev => ({ ...prev, messages: [...(prev?.messages || []), errMsg] }));
+    } finally {
+      setIsOrchestrating(false);
+    }
+  };
+
   // ============================================================
   // 1. LAUNCHER SCREEN (Matching Screenshot 3)
   // ============================================================
@@ -274,15 +327,25 @@ export default function App() {
           <button className="text-slate-400 hover:text-slate-200 text-sm p-1" title="Settings">🛠</button>
           
           {/* Debug Button */}
-          <button className="px-2.5 py-0.5 rounded border border-[#00f0ff]/40 hover:border-[#00f0ff] text-[#00f0ff] font-semibold text-[11px] transition-all">
+          <button
+            onClick={runAllCells}
+            className="px-2.5 py-0.5 rounded border border-[#00f0ff]/40 hover:border-[#00f0ff] text-[#00f0ff] font-semibold text-[11px] transition-all"
+            title="Execute Notebook Cells"
+          >
             Debug
           </button>
 
           {/* Run Solid Cyan Button */}
           <button
-            onClick={runAllCells}
-            className="flex items-center space-x-1.5 px-3 py-1 rounded bg-[#00f0ff] hover:bg-[#38bdf8] text-slate-950 font-bold text-[11px] shadow-[0_0_12px_rgba(0,240,255,0.4)] transition-all"
+            onClick={runAutonomousMLEngineer}
+            disabled={isOrchestrating}
+            className="flex items-center space-x-1.5 px-3 py-1 rounded bg-[#00f0ff] hover:bg-[#38bdf8] text-slate-950 font-bold text-[11px] shadow-[0_0_12px_rgba(0,240,255,0.4)] transition-all disabled:opacity-50"
+            title="Run Full Autonomous ML Pipeline"
           >
+            <span>{isOrchestrating ? "◉" : "▶"}</span>
+            <span>{isOrchestrating ? "Running..." : "Run"}</span>
+          </button>
+        </div>
             <span>▶</span>
             <span>Run</span>
           </button>

@@ -176,3 +176,21 @@ export const TerminalAPI = {
     return res.json();
   },
 };
+
+export const OrchestratorAPI = {
+  runTask: async (data) => {
+    const res = await fetch(`${API_BASE}/api/orchestrator/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    return res.json();
+  },
+};
+
+export const EnvironmentAPI = {
+  getInfo: async () => {
+    const res = await fetch(`${API_BASE}/api/environment/info`);
+    return res.json();
+  },
+};

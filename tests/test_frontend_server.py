@@ -173,3 +173,33 @@ def test_thread_persistence_lifecycle():
     # Delete thread
     del_res = client.post("/api/threads/delete?project_id=proj_thread_test&thread_id=t_test_123")
     assert del_res.status_code == 200
+
+
+def test_orchestrator_run_endpoint(tmp_path):
+    """Verify real multi-agent execution pipeline through backend REST API."""
+    req_payload = {
+        "project_id": "test_api_orch",
+        "user_request": "Train a baseline classifier for customer churn prediction",
+        "dataset_path": "data/sample_churn.csv",
+        "target_column": "churn",
+        "max_experiments": 2,
+    }
+    response = client.post("/api/orchestrator/run", json=req_payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["terminal_phase"] == "TERMINATED"
+    assert data["best_candidate"] is not None
+    assert len(data["generated_files"]) > 0
+    assert "train.py" in data["generated_files"]
+
+
+def test_environment_info_endpoint():
+    """Verify Python environment inspection endpoint."""
+    response = client.get("/api/environment/info")
+    assert response.status_code == 200
+    data = response.json()
+    assert "python_version" in data
+    assert "executable" in data
+    assert "scikit-learn" in data["packages"]
+

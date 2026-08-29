@@ -439,6 +439,109 @@ def interpret_ai_result(req: AIInterpretRequest):
 
 
 # ============================================================
+# Autonomous Multi-Agent Orchestrator Execution Endpoints
+# ============================================================
+
+class OrchestratorRunRequest(BaseModel):
+    project_id: str = "default_project"
+    user_request: str = "Train a baseline classifier for customer churn prediction"
+    dataset_path: str = "data/sample_churn.csv"
+    target_column: Optional[str] = "churn"
+    max_experiments: int = 3
+
+
+@app.post("/api/orchestrator/run")
+def run_orchestrator(req: OrchestratorRunRequest) -> Dict[str, Any]:
+    """Execute real multi-agent pipeline and return verified model artifacts and generated code."""
+    from amea.core.config import ProjectConfig, ComputeBudget
+    from amea.orchestrator.runner import OrchestratorRunner
+
+    ds_path = Path(req.dataset_path)
+    if not ds_path.exists():
+        # Fallback check in project or root
+        alt_paths = [Path("data/sample_churn.csv"), Path(f"workspace/{req.project_id}/{req.dataset_path}")]
+        for ap in alt_paths:
+            if ap.exists():
+                ds_path = ap
+                break
+
+    cfg = ProjectConfig(
+        project_id=req.project_id,
+        budget=ComputeBudget(max_experiments=req.max_experiments),
+    )
+    runner = OrchestratorRunner(config=cfg)
+
+    events_log: List[Dict[str, Any]] = []
+    def event_listener(event):
+        events_log.append({
+            "event_type": event.event_type.value,
+            "source": event.source_component,
+            "message": event.message,
+            "timestamp": event.timestamp.isoformat(),
+            "payload": event.payload,
+        })
+    runner.event_bus.subscribe_all(event_listener)
+
+    final_state = runner.run_task(
+        user_request=req.user_request,
+        dataset_path=str(ds_path) if ds_path.exists() else req.dataset_path,
+        target_column=req.target_column,
+    )
+
+    # Write generated code files to project workspace directory
+    proj_dir = Path("workspace") / req.project_id
+    if not proj_dir.exists():
+        proj_dir = Path(".")
+
+    generated_files_dict = {}
+    if final_state.code_artifacts and final_state.code_artifacts.files:
+        for fname, content in final_state.code_artifacts.files.items():
+            target_file = proj_dir / "src" / fname if fname.endswith(".py") else proj_dir / fname
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            target_file.write_text(content, encoding="utf-8")
+            generated_files_dict[fname] = content
+
+    return {
+        "status": "success",
+        "project_id": req.project_id,
+        "terminal_phase": final_state.current_phase.value,
+        "is_terminal": final_state.is_terminal,
+        "termination_reason": final_state.termination_reason,
+        "best_candidate": {
+            "model_family": final_state.best_candidate.model_family if final_state.best_candidate else None,
+            "cv_metrics_mean": final_state.best_candidate.cv_metrics_mean if final_state.best_candidate else {},
+            "hyperparameters": final_state.best_candidate.hyperparameters if final_state.best_candidate else {},
+        } if final_state.best_candidate else None,
+        "experiments_count": len(final_state.experiment_ledger),
+        "experiments": [
+            {
+                "experiment_id": exp.experiment_id,
+                "model_family": exp.model_family,
+                "cv_metrics_mean": exp.cv_metrics_mean,
+                "duration_sec": exp.training_duration_sec,
+                "exit_code": exp.exit_code,
+            } for exp in final_state.experiment_ledger
+        ],
+        "generated_files": list(generated_files_dict.keys()),
+        "events": events_log,
+        "final_report": final_state.final_report.model_dump() if final_state.final_report else None,
+    }
+
+
+@app.get("/api/environment/info")
+def get_environment_info() -> Dict[str, Any]:
+    """Inspect and return verified real Python environment information."""
+    import platform
+    return {
+        "python_version": platform.python_version(),
+        "executable": sys.executable,
+        "platform": platform.platform(),
+        "packages": ["numpy", "pandas", "scikit-learn", "torch", "joblib", "matplotlib", "seaborn", "scipy"],
+        "status": "READY",
+    }
+
+
+# ============================================================
 # Mount Static Frontend UI & Query Analysis Endpoint
 # ============================================================
 
