@@ -1,0 +1,459 @@
+"""Unified FastAPI Server for AMEA - Autonomous ML Engineer Workspace."""
+
+import io
+import json
+import os
+import shutil
+import subprocess
+import sys
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from uuid import uuid4
+
+import starlette.routing
+_orig_router_init = starlette.routing.Router.__init__
+def _compat_router_init(self, *args, on_startup=None, on_shutdown=None, **kwargs):
+    return _orig_router_init(self, *args, **kwargs)
+starlette.routing.Router.__init__ = _compat_router_init
+
+from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from amea.execution.kernel.ai_cell_assistant import AICellAssistant
+from amea.execution.kernel.execution_request import (
+    BatchExecuteRequest,
+    ExecuteCellRequest,
+    NotebookCell,
+)
+from amea.execution.kernel.execution_result import CellExecutionResult
+from amea.execution.kernel.graph_kernel_executor import GraphKernelExecutor
+from amea.execution.kernel.kernel_manager import KernelManager
+from amea.execution.kernel.notebook_manager import NotebookManager
+from amea.execution.router import kernel_router
+from amea.query_analysis.router import router as query_analysis_router
+
+
+# ============================================================
+# Request / Response Schemas for Project Management & Server
+# ============================================================
+
+class ProjectTemplate(BaseModel):
+    name: str
+    description: str
+
+
+class CreateProjectRequest(BaseModel):
+    name: str
+    location: Optional[str] = None
+    template: str = "empty"  # empty, classification, regression, time_series, data_analysis
+
+
+class OpenProjectRequest(BaseModel):
+    path: str
+
+
+class FileOperationRequest(BaseModel):
+    project_path: str
+    relative_path: str
+    content: Optional[str] = None
+    new_name: Optional[str] = None
+
+
+class TerminalExecRequest(BaseModel):
+    project_path: str
+    command: str
+
+
+class AIThreadMessage(BaseModel):
+    id: str = Field(default_factory=lambda: f"msg_{uuid4().hex[:8]}")
+    sender: str  # "user" or "ai"
+    text: str
+    code_diff: Optional[Dict[str, Any]] = None
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class AIThread(BaseModel):
+    id: str = Field(default_factory=lambda: f"thread_{uuid4().hex[:8]}")
+    project_id: str
+    title: str
+    messages: List[AIThreadMessage] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class SaveThreadRequest(BaseModel):
+    project_id: str
+    thread: AIThread
+
+
+# ============================================================
+# FastAPI Application Configuration
+# ============================================================
+
+app = FastAPI(
+    title="AMEA - Autonomous ML Engineer Workspace",
+    description="Interactive ML Engineering IDE Backend with Python Kernel, AI Agent Threads, and Notebooks",
+    version="1.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# In-memory thread repository (backed by filesystem)
+_THREADS_DB: Dict[str, List[AIThread]] = {}
+
+
+# ============================================================
+# Project Management & File System Endpoints
+# ============================================================
+
+@app.post("/api/project/create")
+def create_project(req: CreateProjectRequest) -> Dict[str, Any]:
+    """Create a new ML project directory with requirements.txt and starter code."""
+    base_loc = Path(req.location or "workspace").resolve()
+    project_dir = base_loc / req.name
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Always ensure requirements.txt exists
+    req_file = project_dir / "requirements.txt"
+    default_reqs = "numpy\npandas\nscikit-learn\njoblib\nmatplotlib\nseaborn\n"
+    if not req_file.exists():
+        req_file.write_text(default_reqs, encoding="utf-8")
+
+    # 2. Always ensure README.md exists
+    readme_file = project_dir / "README.md"
+    if not readme_file.exists():
+        readme_file.write_text(f"# {req.name}\n\nAutonomous ML Engineering project created with AMEA.\n", encoding="utf-8")
+
+    # 3. Create subdirectories
+    (project_dir / "src").mkdir(exist_ok=True)
+    (project_dir / "data").mkdir(exist_ok=True)
+    (project_dir / "models").mkdir(exist_ok=True)
+    (project_dir / "notebooks").mkdir(exist_ok=True)
+    (project_dir / "artifacts").mkdir(exist_ok=True)
+
+    # 4. Populate template files
+    if req.template in ("classification", "regression"):
+        starter_code = f"""import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+
+print("AMEA ML project '{req.name}' initialized.")
+"""
+        (project_dir / "src" / "train.py").write_text(starter_code, encoding="utf-8")
+
+    elif req.template == "data_analysis":
+        starter_code = """import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+print("Data analysis exploration pipeline ready.")
+"""
+        (project_dir / "src" / "eda.py").write_text(starter_code, encoding="utf-8")
+
+    return {
+        "status": "success",
+        "project_name": req.name,
+        "project_path": str(project_dir),
+    }
+
+
+@app.post("/api/project/open")
+def open_project(req: OpenProjectRequest) -> Dict[str, Any]:
+    """Open existing folder, scan contents, auto-ensure requirements.txt, and initialize workspace."""
+    p = Path(req.path).resolve()
+    if not p.exists() or not p.is_dir():
+        raise HTTPException(status_code=404, detail=f"Directory not found: {req.path}")
+
+    # Ensure requirements.txt exists
+    req_file = p / "requirements.txt"
+    if not req_file.exists():
+        req_file.write_text("numpy\npandas\nscikit-learn\njoblib\nmatplotlib\nseaborn\n", encoding="utf-8")
+
+    return {
+        "status": "success",
+        "project_name": p.name,
+        "project_path": str(p),
+    }
+
+
+@app.get("/api/project/tree")
+def get_project_tree(path: str) -> Dict[str, Any]:
+    """Scan and return recursive directory tree."""
+    root_path = Path(path).resolve()
+    if not root_path.exists():
+        raise HTTPException(status_code=404, detail="Path does not exist")
+
+    def build_tree(current_dir: Path) -> List[Dict[str, Any]]:
+        items = []
+        try:
+            for item in sorted(current_dir.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+                if item.name.startswith((".", "__pycache__")):
+                    continue
+                node = {
+                    "name": item.name,
+                    "path": str(item.relative_to(root_path)).replace("\\", "/"),
+                    "is_dir": item.is_dir(),
+                }
+                if item.is_dir():
+                    node["children"] = build_tree(item)
+                else:
+                    node["size_bytes"] = item.stat().st_size
+                items.append(node)
+        except PermissionError:
+            pass
+        return items
+
+    return {
+        "root_name": root_path.name,
+        "root_path": str(root_path),
+        "tree": build_tree(root_path),
+    }
+
+
+@app.post("/api/project/file/read")
+def read_file(req: FileOperationRequest) -> Dict[str, Any]:
+    """Read a project file securely."""
+    base = Path(req.project_path).resolve()
+    target = (base / req.relative_path).resolve()
+    if not str(target).startswith(str(base)):
+        raise HTTPException(status_code=403, detail="Path traversal forbidden")
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    content = target.read_text(encoding="utf-8", errors="replace")
+    return {"content": content, "path": req.relative_path}
+
+
+@app.post("/api/project/file/write")
+def write_file(req: FileOperationRequest) -> Dict[str, Any]:
+    """Write or create a project file."""
+    base = Path(req.project_path).resolve()
+    target = (base / req.relative_path).resolve()
+    if not str(target).startswith(str(base)):
+        raise HTTPException(status_code=403, detail="Path traversal forbidden")
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(req.content or "", encoding="utf-8")
+    return {"status": "saved", "path": req.relative_path}
+
+
+@app.post("/api/project/file/create-dir")
+def create_directory(req: FileOperationRequest) -> Dict[str, Any]:
+    """Create a folder inside the project."""
+    base = Path(req.project_path).resolve()
+    target = (base / req.relative_path).resolve()
+    if not str(target).startswith(str(base)):
+        raise HTTPException(status_code=403, detail="Path traversal forbidden")
+    target.mkdir(parents=True, exist_ok=True)
+    return {"status": "created", "path": req.relative_path}
+
+
+@app.post("/api/project/file/delete")
+def delete_file(req: FileOperationRequest) -> Dict[str, Any]:
+    """Delete a file or directory."""
+    base = Path(req.project_path).resolve()
+    target = (base / req.relative_path).resolve()
+    if not str(target).startswith(str(base)) or target == base:
+        raise HTTPException(status_code=403, detail="Cannot delete root or outside files")
+
+    if target.exists():
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+        else:
+            target.unlink(missing_ok=True)
+    return {"status": "deleted", "path": req.relative_path}
+
+
+# ============================================================
+# Project Download / ZIP Export (Secret Scrubbing)
+# ============================================================
+
+@app.get("/api/project/download-zip")
+def download_project_zip(project_path: str):
+    """Package project into a clean ZIP file excluding secrets and hidden files."""
+    base = Path(project_path).resolve()
+    if not base.exists():
+        raise HTTPException(status_code=404, detail="Project path not found")
+
+    zip_buffer = io.BytesIO()
+    forbidden_files = {".env", "id_rsa", ".aws", ".git", ".pytest_cache", "__pycache__"}
+
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(base):
+            dirs[:] = [d for d in dirs if d not in forbidden_files and not d.startswith(".")]
+            for file in files:
+                if file in forbidden_files or file.startswith("."):
+                    continue
+                file_path = Path(root) / file
+                archive_name = file_path.relative_to(base)
+                zf.write(file_path, archive_name)
+
+    zip_buffer.seek(0)
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={base.name}.zip"},
+    )
+
+
+# ============================================================
+# Terminal Command Execution Endpoint
+# ============================================================
+
+@app.post("/api/terminal/exec")
+def execute_terminal_command(req: TerminalExecRequest) -> Dict[str, Any]:
+    """Execute shell command safely inside project directory."""
+    base = Path(req.project_path).resolve()
+    if not base.exists():
+        raise HTTPException(status_code=404, detail="Project path not found")
+
+    try:
+        proc = subprocess.run(
+            req.command,
+            cwd=str(base),
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return {
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+            "exit_code": proc.returncode,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "stdout": "",
+            "stderr": "Command execution timed out after 30s.",
+            "exit_code": -1,
+        }
+    except Exception as e:
+        return {
+            "stdout": "",
+            "stderr": str(e),
+            "exit_code": 1,
+        }
+
+
+# ============================================================
+# Persistent AI Thread Management Endpoints
+# ============================================================
+
+@app.get("/api/threads/list")
+def list_threads(project_id: str) -> List[AIThread]:
+    """List persistent conversation threads for a project."""
+    return _THREADS_DB.get(project_id, [])
+
+
+@app.post("/api/threads/save")
+def save_thread(req: SaveThreadRequest) -> AIThread:
+    """Save or update an AI conversation thread."""
+    threads = _THREADS_DB.setdefault(req.project_id, [])
+    for i, t in enumerate(threads):
+        if t.id == req.thread.id:
+            threads[i] = req.thread
+            return req.thread
+    threads.append(req.thread)
+    return req.thread
+
+
+@app.post("/api/threads/delete")
+def delete_thread(project_id: str, thread_id: str) -> Dict[str, bool]:
+    """Delete an AI conversation thread."""
+    if project_id in _THREADS_DB:
+        _THREADS_DB[project_id] = [t for t in _THREADS_DB[project_id] if t.id != thread_id]
+    return {"success": True}
+
+
+# ============================================================
+# Kernel Execution Endpoints
+# ============================================================
+
+from amea.execution.router import (
+    AIGenerateCellRequest,
+    AIInterpretRequest,
+    CreateSessionRequest,
+    LoadNotebookRequest,
+    SaveNotebookRequest,
+    SessionActionRequest,
+)
+
+@app.post("/api/kernel/session")
+def create_kernel_session(req: CreateSessionRequest):
+    return kernel_router.create_session(req)
+
+@app.get("/api/kernel/session/{session_id}")
+def get_kernel_session(session_id: str):
+    sess = kernel_router.get_session(session_id)
+    if not sess:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return sess
+
+@app.post("/api/kernel/execute")
+def execute_kernel_cell(req: ExecuteCellRequest):
+    return kernel_router.execute_cell(req)
+
+@app.post("/api/kernel/execute-batch")
+def execute_kernel_batch(req: BatchExecuteRequest):
+    return kernel_router.execute_batch(req)
+
+@app.post("/api/kernel/interrupt")
+def interrupt_kernel(req: SessionActionRequest):
+    return kernel_router.interrupt_session(req)
+
+@app.post("/api/kernel/restart")
+def restart_kernel(req: SessionActionRequest):
+    return kernel_router.restart_session(req)
+
+@app.delete("/api/kernel/session/{session_id}")
+def shutdown_kernel(session_id: str):
+    return kernel_router.shutdown_session(session_id)
+
+@app.post("/api/kernel/notebook/save")
+def save_notebook(req: SaveNotebookRequest):
+    return kernel_router.save_notebook(req)
+
+@app.post("/api/kernel/notebook/load")
+def load_notebook(req: LoadNotebookRequest):
+    return kernel_router.load_notebook(req)
+
+@app.post("/api/kernel/ai/generate-cell")
+def generate_ai_cell(req: AIGenerateCellRequest):
+    return kernel_router.generate_ai_cell(req)
+
+@app.post("/api/kernel/ai/interpret-result")
+def interpret_ai_result(req: AIInterpretRequest):
+    return kernel_router.interpret_result(req)
+
+
+# ============================================================
+# Mount Static Frontend UI & Query Analysis Endpoint
+# ============================================================
+
+from amea.query_analysis.schemas import QueryAnalysisRequest, QueryAnalysisResponse
+from amea.query_analysis.router import analyze_query_data
+
+@app.post("/api/query-analysis/analyze")
+def analyze_query_endpoint(req: QueryAnalysisRequest) -> QueryAnalysisResponse:
+    return analyze_query_data(req)
+
+ui_dir = Path(__file__).parent / "ui"
+if ui_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(ui_dir / "static")), name="static")
+
+    @app.get("/")
+    def serve_frontend_root():
+        return FileResponse(str(ui_dir / "index.html"))
+

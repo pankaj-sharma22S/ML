@@ -1,0 +1,95 @@
+/* AMEA Dark Theme & Engineering IDE Stylesheet */
+
+:root {
+  --bg-primary: #0f172a;
+  --bg-secondary: #1e293b;
+  --bg-tertiary: #334155;
+  --border-color: #334155;
+  --accent-color: #38bdf8;
+  --accent-hover: #0ea5e9;
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-primary);
+  color: var(--text-main);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Code and monospaced elements */
+code, pre, .font-mono {
+  font-family: "JetBrains Mono", "Fira Code", Consolas, "Courier New", monospace !important;
+}
+
+/* Resizable Panels Splitters */
+.resizer-x {
+  width: 4px;
+  cursor: col-resize;
+  background-color: transparent;
+  transition: background-color 0.15s ease;
+}
+.resizer-x:hover, .resizer-x.active {
+  background-color: #38bdf8;
+}
+
+.resizer-y {
+  height: 4px;
+  cursor: row-resize;
+  background-color: transparent;
+  transition: background-color 0.15s ease;
+}
+.resizer-y:hover, .resizer-y.active {
+  background-color: #38bdf8;
+}
+
+/* Notebook Cell Styles */
+.notebook-cell {
+  border-left: 3px solid transparent;
+  transition: border-color 0.2s ease;
+}
+.notebook-cell:focus-within, .notebook-cell.active {
+  border-left-color: #38bdf8;
+}
+
+/* Interactive Table Preview */
+.dataframe-table th {
+  position: sticky;
+  top: 0;
+  background-color: #1e293b;
+  z-index: 10;
+}
+
+/* Streaming Cursor Animation */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.stream-cursor {
+  display: inline-block;
+  width: 8px;
+  height: 15px;
+  background-color: #38bdf8;
+  vertical-align: middle;
+  animation: blink 1s infinite;
+}
