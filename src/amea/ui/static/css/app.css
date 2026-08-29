@@ -1,95 +1,122 @@
-/* AMEA Dark Theme & Engineering IDE Stylesheet */
+/* AMEA NEURON_IDE - High-Density ML Engineering Workspace Stylesheet */
 
 :root {
-  --bg-primary: #0f172a;
-  --bg-secondary: #1e293b;
-  --bg-tertiary: #334155;
-  --border-color: #334155;
-  --accent-color: #38bdf8;
-  --accent-hover: #0ea5e9;
-  --text-main: #f8fafc;
-  --text-muted: #94a3b8;
+  --bg-app: #080c14;
+  --bg-panel: #0d121d;
+  --bg-card: #111827;
+  --bg-cell: #0a0e17;
+  --border-subtle: #1a2333;
+  --border-active: #00f0ff;
+  --cyan-glow: rgba(0, 240, 255, 0.15);
+  --purple-glow: rgba(168, 85, 247, 0.2);
+  --text-main: #f1f5f9;
+  --text-muted: #8492a6;
+  --text-dim: #4e5d78;
 }
 
 body {
   margin: 0;
   padding: 0;
-  background-color: var(--bg-primary);
+  background-color: var(--bg-app);
   color: var(--text-main);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   overflow: hidden;
   user-select: none;
 }
 
-/* Custom Scrollbars */
+/* Blueprint Grid Canvas for Pipeline Graph */
+.blueprint-grid {
+  background-color: #070b12;
+  background-image: 
+    linear-gradient(to right, rgba(30, 41, 59, 0.35) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(30, 41, 59, 0.35) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Custom Minimal Scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 3px;
+  background: #1e293b;
+  border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #334155;
 }
 
-/* Code and monospaced elements */
+/* Monospace & Code */
 code, pre, .font-mono {
-  font-family: "JetBrains Mono", "Fira Code", Consolas, "Courier New", monospace !important;
+  font-family: "JetBrains Mono", "Fira Code", Consolas, Menlo, monospace !important;
 }
 
-/* Resizable Panels Splitters */
-.resizer-x {
-  width: 4px;
+/* Cyan Glowing Borders */
+.border-cyan-glow {
+  border-color: #00f0ff;
+  box-shadow: 0 0 15px var(--cyan-glow);
+}
+
+.border-purple-glow {
+  border-color: #a855f7;
+  box-shadow: 0 0 15px var(--purple-glow);
+}
+
+/* Progress bar gradient */
+.progress-gradient-purple {
+  background: linear-gradient(90deg, #9333ea 0%, #c084fc 60%, #00f0ff 100%);
+}
+
+/* Glowing Connecting Curve */
+.pipeline-wire {
+  stroke: #00f0ff;
+  stroke-width: 2;
+  fill: none;
+  filter: drop-shadow(0 0 6px rgba(0, 240, 255, 0.6));
+}
+
+/* Loss Curve Visual Bars */
+.loss-bar {
+  transition: height 0.3s ease, background-color 0.2s ease;
+}
+.loss-bar:hover {
+  background-color: #00f0ff !important;
+}
+
+/* Resizers */
+.resizer-col {
+  width: 3px;
   cursor: col-resize;
   background-color: transparent;
   transition: background-color 0.15s ease;
 }
-.resizer-x:hover, .resizer-x.active {
-  background-color: #38bdf8;
+.resizer-col:hover, .resizer-col.active {
+  background-color: #00f0ff;
 }
 
-.resizer-y {
-  height: 4px;
+.resizer-row {
+  height: 3px;
   cursor: row-resize;
   background-color: transparent;
   transition: background-color 0.15s ease;
 }
-.resizer-y:hover, .resizer-y.active {
-  background-color: #38bdf8;
+.resizer-row:hover, .resizer-row.active {
+  background-color: #00f0ff;
 }
 
-/* Notebook Cell Styles */
-.notebook-cell {
-  border-left: 3px solid transparent;
-  transition: border-color 0.2s ease;
-}
-.notebook-cell:focus-within, .notebook-cell.active {
-  border-left-color: #38bdf8;
-}
-
-/* Interactive Table Preview */
-.dataframe-table th {
-  position: sticky;
-  top: 0;
-  background-color: #1e293b;
-  z-index: 10;
-}
-
-/* Streaming Cursor Animation */
-@keyframes blink {
+/* Blinking terminal cursor */
+@keyframes term-blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
 }
-.stream-cursor {
+.term-cursor {
   display: inline-block;
-  width: 8px;
-  height: 15px;
-  background-color: #38bdf8;
+  width: 7px;
+  height: 14px;
+  background-color: #00f0ff;
   vertical-align: middle;
-  animation: blink 1s infinite;
+  animation: term-blink 1s infinite;
 }

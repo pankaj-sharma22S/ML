@@ -7,137 +7,131 @@ const { useState, useEffect, useRef } = React;
 // ============================================================
 
 export default function App() {
-  // Project State
+  // Navigation / View State
   const [currentProject, setCurrentProject] = useState(null); // { name, path }
-  const [fileTree, setFileTree] = useState([]);
-  const [openFiles, setOpenFiles] = useState([]); // [{ path, name, content, isDirty }]
-  const [activeFile, setActiveFile] = useState(null);
+  const [activeTab, setActiveTab] = useState("train_model.ipynb"); // "train_model.ipynb", "model_architecture.py", "Pipeline Graph"
+  const [activeActivity, setActiveActivity] = useState("explorer"); // "explorer", "search", "git", "threads", "pipeline"
   
-  // Workspace Mode (CODE | NOTEBOOK | GRAPH)
-  const [workspaceMode, setWorkspaceMode] = useState("NOTEBOOK");
+  // Explorer & Files
+  const [fileTree, setFileTree] = useState([]);
+  const [openFiles, setOpenFiles] = useState([
+    { name: "train_model.ipynb", path: "src/train_model.ipynb", type: "notebook" },
+    { name: "model_architecture.py", path: "src/model_architecture.py", type: "code", content: `import torch\nimport torch.nn as nn\n\nclass VisionTransformer(nn.Module):\n    def __init__(self, depth=12, heads=8, embed_dim=768):\n        super().__init__()\n        self.depth = depth\n        self.heads = heads\n        self.transformer = nn.TransformerEncoder(\n            nn.TransformerEncoderLayer(d_model=embed_dim, nhead=heads),\n            num_layers=depth\n        )\n\n    def forward(self, x):\n        return self.transformer(x)\n` },
+    { name: "Pipeline Graph", path: "graph", type: "graph" }
+  ]);
+  const [activeFileContent, setActiveFileContent] = useState("");
 
-  // Notebook State
+  // Notebook State (Matching Screenshot 1)
   const [notebookCells, setNotebookCells] = useState([
     {
       id: "c_1",
       type: "CODE",
-      code: "import pandas as pd\nimport numpy as np\n\n# 1. Load sample dataset\ndf = pd.DataFrame({\n    'age': [21, 25, 30, 45, 52, 28],\n    'salary': [35000, 52000, 68000, 95000, 120000, 48000],\n    'department': ['IT', 'HR', 'Finance', 'Exec', 'Exec', 'IT'],\n    'churn': [0, 1, 0, 0, 1, 0]\n})\ndf.head()",
-      status: "IDLE",
-      output: null,
-      execCount: null,
+      code: `import torch\nfrom model_architecture import VisionTransformer\n\nmodel = VisionTransformer(depth=12, heads=8)\nmodel = torch.nn.DataParallel(model).cuda()\nprint(f"Model loaded onto {torch.cuda.device_count()} GPUs.")`,
+      status: "SUCCESS",
+      output: [{ output_type: "STREAM", text: "Model loaded onto 4 GPUs." }],
+      execCount: 1,
     },
     {
       id: "c_2",
       type: "CODE",
-      code: "df.describe()",
-      status: "IDLE",
+      code: `trainer.fit(model, train_dataloader, epochs=50)`,
+      status: "RUNNING",
+      progressText: "Epoch 14/50 [======>.......] 45% - ETA: 12m 34s",
+      progressPercent: 45,
+      lossData: [0.85, 0.72, 0.65, 0.58, 0.51, 0.46, 0.42, 0.39, 0.36, 0.342],
       output: null,
-      execCount: null,
-    },
-    {
-      id: "c_3",
-      type: "CODE",
-      code: "import matplotlib.pyplot as plt\n\nplt.figure(figsize=(7, 3.5))\nplt.bar(df['department'], df['salary'], color='#38bdf8')\nplt.title('Salary by Department')\nplt.ylabel('Salary ($)')\nplt.show()",
-      status: "IDLE",
-      output: null,
-      execCount: null,
+      execCount: 2,
     }
   ]);
   const [activeCellId, setActiveCellId] = useState("c_1");
 
-  // Kernel State
+  // Kernel & Backend State
   const [kernelSession, setKernelSession] = useState(null);
-  const [kernelStats, setKernelStats] = useState({ status: "IDLE", memory_mb: 180, cpu_percent: 2.1, executions: 0 });
+  const [kernelStats, setKernelStats] = useState({ status: "RUNNING", memory_mb: 412, cpu_percent: 18.5, gpu_count: 4 });
 
-  // AI Threads State
-  const [threads, setThreads] = useState([]);
+  // AI Threads State (Matching Screenshot 1)
+  const [threads, setThreads] = useState([
+    {
+      id: "thread_1",
+      title: "Transformer Optimization",
+      messages: [
+        {
+          id: "m_1",
+          sender: "ai",
+          text: "I noticed a potential bottleneck in your DataLoader configuration on line 42 of `model_architecture.py`.\n\nIncreasing `num_workers` to 8 and setting `pin_memory=True` could improve GPU utilization by ~15%.",
+          hasActions: true,
+        },
+        {
+          id: "m_2",
+          sender: "user",
+          text: "How is the current loss trending compared to the baseline?",
+        },
+        {
+          id: "m_3",
+          sender: "ai",
+          text: "The current training loss is **0.342**, which is 12% lower than the baseline at Epoch 14.\n\nHowever, validation loss has plateaued. You might consider adding a Learning Rate Scheduler.",
+        }
+      ]
+    }
+  ]);
   const [activeThread, setActiveThread] = useState(null);
   const [aiInput, setAiInput] = useState("");
   const [isAiStreaming, setIsAiStreaming] = useState(false);
-  const [suggestedDiff, setSuggestedDiff] = useState(null);
 
-  // Bottom Panel State (TERMINAL | OUTPUT | PROBLEMS | KERNEL | ARTIFACTS)
+  // Bottom Dock Tabs (TERMINAL | OUTPUT | PROBLEMS)
   const [bottomTab, setBottomTab] = useState("TERMINAL");
-  const [terminalHistory, setTerminalHistory] = useState([
-    { type: "stdout", text: "AMEA Interactive ML Environment initialized.\nPython 3.11.9 (main, Apr 2026)\nType 'help', 'copyright', 'credits' or 'license' for more info." }
+  const [isBottomOpen, setIsBottomOpen] = useState(true);
+  const [terminalLines, setTerminalLines] = useState([
+    { type: "prompt", text: "user@amea-node-01:~/project$ nvidia-smi" },
+    { type: "stdout", text: "Thu Oct 26 14:23:41 2023" },
+    { type: "stdout", text: "+-----------------------------------------------------------------------------+" },
+    { type: "stdout", text: "| NVIDIA-SMI 535.104.05    Driver Version: 535.104.05    CUDA Version: 12.2   |" },
+    { type: "stdout", text: "|-------------------------------+----------------------+----------------------+" },
+    { type: "stdout", text: "| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |" },
+    { type: "stdout", text: "|   0  NVIDIA RTX 4090     On   | 00000000:01:00.0 Off |                  N/A |" },
+    { type: "stdout", text: "|   1  NVIDIA RTX 4090     On   | 00000000:02:00.0 Off |                  N/A |" },
+    { type: "stdout", text: "+-----------------------------------------------------------------------------+" },
+    { type: "prompt", text: "user@amea-node-01:~/project$ tail -f training.log" },
+    { type: "info", text: "[INFO] Optimizer state initialized. Learning rate set to 1e-4." }
   ]);
   const [terminalInput, setTerminalInput] = useState("");
 
-  // Modals & Panels Visibility
+  // Modals
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
-  const [showDiffModal, setShowDiffModal] = useState(false);
-  const [isExplorerOpen, setIsExplorerOpen] = useState(true);
-  const [isThreadsOpen, setIsThreadsOpen] = useState(true);
-  const [isBottomOpen, setIsBottomOpen] = useState(true);
 
   // Layout Dimensions
   const [explorerWidth, setExplorerWidth] = useState(240);
-  const [threadsWidth, setThreadsWidth] = useState(360);
-  const [bottomHeight, setBottomHeight] = useState(220);
+  const [threadsWidth, setThreadsWidth] = useState(340);
+  const [bottomHeight, setBottomHeight] = useState(200);
 
-  // Initialize Kernel on project start
+  // Initialize Thread & Tree
   useEffect(() => {
-    if (currentProject) {
-      initProjectKernel();
-      loadProjectTree();
-      loadThreads();
+    if (threads.length > 0 && !activeThread) {
+      setActiveThread(threads[0]);
     }
-  }, [currentProject]);
+  }, [threads]);
 
-  const initProjectKernel = async () => {
+  // Handle Project Selection & Kernel Boot
+  const handleOpenProject = async (projName, projPath) => {
     try {
-      const sess = await KernelAPI.createSession(currentProject.name);
+      const res = await ProjectAPI.open(projPath || `workspace/${projName}`);
+      setCurrentProject({ name: res.project_name, path: res.project_path });
+      
+      // Boot Jupyter Kernel
+      const sess = await KernelAPI.createSession(res.project_name);
       setKernelSession(sess);
-      setKernelStats({
-        status: sess.status || "IDLE",
-        memory_mb: 210,
-        cpu_percent: 1.5,
-        executions: sess.execution_count || 0
-      });
+
+      // Load Tree
+      const treeRes = await ProjectAPI.getTree(res.project_path);
+      setFileTree(treeRes.tree || []);
     } catch (e) {
-      console.error("Kernel init failed", e);
+      console.log("Using local project space:", projName);
+      setCurrentProject({ name: projName, path: `workspace/${projName}` });
     }
   };
 
-  const loadProjectTree = async () => {
-    try {
-      const res = await ProjectAPI.getTree(currentProject.path);
-      setFileTree(res.tree || []);
-    } catch (e) {
-      console.error("Tree load error", e);
-    }
-  };
-
-  const loadThreads = async () => {
-    try {
-      const list = await ThreadAPI.list(currentProject.name);
-      if (list && list.length > 0) {
-        setThreads(list);
-        setActiveThread(list[0]);
-      } else {
-        const defaultThread = {
-          id: "thread_default",
-          project_id: currentProject.name,
-          title: "Data Exploration & EDA",
-          messages: [
-            {
-              id: "msg_1",
-              sender: "ai",
-              text: `Welcome to **${currentProject.name}**!\n\nI am your Autonomous ML Engineering Partner. I can inspect datasets, draft validation strategies, write clean pipelines, debug models, and interpret outputs. What would you like to explore first?`
-            }
-          ]
-        };
-        setThreads([defaultThread]);
-        setActiveThread(defaultThread);
-        await ThreadAPI.save(currentProject.name, defaultThread);
-      }
-    } catch (e) {
-      console.error("Threads load error", e);
-    }
-  };
-
-  // Cell Execution Handling
+  // Run Cell Action
   const runCell = async (cellId) => {
     const cell = notebookCells.find(c => c.id === cellId);
     if (!cell || cell.type !== "CODE") return;
@@ -145,7 +139,8 @@ export default function App() {
     setNotebookCells(prev => prev.map(c => c.id === cellId ? { ...c, status: "RUNNING" } : c));
 
     try {
-      const res = await KernelAPI.executeCell(kernelSession ? kernelSession.session_id : "default", cellId, cell.code);
+      const sessId = kernelSession ? kernelSession.session_id : "default";
+      const res = await KernelAPI.executeCell(sessId, cellId, cell.code);
       
       setNotebookCells(prev => prev.map(c => {
         if (c.id === cellId) {
@@ -153,31 +148,17 @@ export default function App() {
             ...c,
             status: res.is_success ? "SUCCESS" : "ERROR",
             output: res.outputs || [],
-            execCount: res.execution_count || (c.execCount ? c.execCount + 1 : 1),
+            execCount: res.execution_count || 1,
           };
         }
         return c;
-      }));
-
-      setKernelStats(prev => ({
-        ...prev,
-        executions: prev.executions + 1,
-        status: "IDLE"
       }));
     } catch (e) {
-      setNotebookCells(prev => prev.map(c => {
-        if (c.id === cellId) {
-          return {
-            ...c,
-            status: "ERROR",
-            output: [{ output_type: "ERROR", error_name: "ExecutionError", error_value: e.message }],
-          };
-        }
-        return c;
-      }));
+      setNotebookCells(prev => prev.map(c => c.id === cellId ? { ...c, status: "ERROR" } : c));
     }
   };
 
+  // Run All Cells
   const runAllCells = async () => {
     for (const cell of notebookCells) {
       if (cell.type === "CODE") {
@@ -186,77 +167,51 @@ export default function App() {
     }
   };
 
-  const runFromHere = async (startCellId) => {
-    let start = false;
-    for (const cell of notebookCells) {
-      if (cell.id === startCellId) start = true;
-      if (start && cell.type === "CODE") {
-        await runCell(cell.id);
+  // Terminal Execution Handler
+  const handleTerminalSubmit = async (e) => {
+    e.preventDefault();
+    if (!terminalInput.trim()) return;
+    const cmd = terminalInput;
+    setTerminalInput("");
+
+    setTerminalLines(prev => [...prev, { type: "prompt", text: `user@amea-node-01:~/project$ ${cmd}` }]);
+
+    try {
+      const projPath = currentProject ? currentProject.path : "workspace";
+      const res = await TerminalAPI.exec(projPath, cmd);
+      if (res.stdout) {
+        setTerminalLines(prev => [...prev, { type: "stdout", text: res.stdout }]);
       }
+      if (res.stderr) {
+        setTerminalLines(prev => [...prev, { type: "stderr", text: res.stderr }]);
+      }
+    } catch (e) {
+      setTerminalLines(prev => [...prev, { type: "stderr", text: e.message }]);
     }
   };
 
-  const addCell = (afterId, type = "CODE") => {
-    const newCell = {
-      id: "c_" + Date.now().toString(36),
-      type: type,
-      code: type === "CODE" ? "# Write Python code...\n" : "## New Markdown Section\n",
-      status: "IDLE",
-      output: null,
-      execCount: null,
-    };
-    const index = notebookCells.findIndex(c => c.id === afterId);
-    if (index === -1) {
-      setNotebookCells(prev => [...prev, newCell]);
-    } else {
-      const updated = [...notebookCells];
-      updated.splice(index + 1, 0, newCell);
-      setNotebookCells(updated);
-    }
-    setActiveCellId(newCell.id);
-  };
-
-  const deleteCell = (cellId) => {
-    if (notebookCells.length <= 1) return;
-    setNotebookCells(prev => prev.filter(c => c.id !== cellId));
-  };
-
-  // AI Code Generation & Interpretation
+  // AI Send Handler
   const handleAiSend = async () => {
     if (!aiInput.trim() || isAiStreaming) return;
-    const userText = aiInput;
+    const promptText = aiInput;
     setAiInput("");
 
-    const newMsg = {
-      id: "msg_" + Date.now(),
-      sender: "user",
-      text: userText,
-      timestamp: new Date().toISOString()
-    };
-
-    const updatedMessages = [...(activeThread.messages || []), newMsg];
+    const userMsg = { id: "m_" + Date.now(), sender: "user", text: promptText };
+    const updatedMessages = [...(activeThread?.messages || []), userMsg];
     const updatedThread = { ...activeThread, messages: updatedMessages };
     setActiveThread(updatedThread);
     setIsAiStreaming(true);
 
     try {
-      const suggestion = await AIAPI.generateCell(userText, ["df"]);
-      
-      const aiResponseMsg = {
-        id: "msg_ai_" + Date.now(),
+      const res = await AIAPI.generateCell(promptText, ["model", "df"]);
+      const aiMsg = {
+        id: "m_ai_" + Date.now(),
         sender: "ai",
-        text: `I've prepared the analysis for: **"${userText}"**.\n\n${suggestion.explanation}`,
-        code_diff: {
-          filename: "notebook_cell",
-          code: suggestion.code,
-          is_safe: suggestion.is_safe
-        },
-        timestamp: new Date().toISOString()
+        text: `Here is the suggested analysis for **"${promptText}"**:\n\n${res.explanation}`,
+        code_diff: { code: res.code },
+        hasActions: true,
       };
-
-      const finalThread = { ...updatedThread, messages: [...updatedMessages, aiResponseMsg] };
-      setActiveThread(finalThread);
-      await ThreadAPI.save(currentProject.name, finalThread);
+      setActiveThread({ ...updatedThread, messages: [...updatedMessages, aiMsg] });
     } catch (e) {
       console.error(e);
     } finally {
@@ -264,558 +219,728 @@ export default function App() {
     }
   };
 
-  const applyAiCodeToNotebook = (code) => {
-    const newCell = {
-      id: "c_ai_" + Date.now().toString(36),
-      type: "CODE",
-      code: code,
-      status: "IDLE",
-      output: null,
-      execCount: null,
-    };
-    setNotebookCells(prev => [...prev, newCell]);
-    setActiveCellId(newCell.id);
-    setWorkspaceMode("NOTEBOOK");
-  };
-
-  // Terminal Execution
-  const handleTerminalSubmit = async (e) => {
-    e.preventDefault();
-    if (!terminalInput.trim()) return;
-    const cmd = terminalInput;
-    setTerminalInput("");
-
-    setTerminalHistory(prev => [...prev, { type: "stdin", text: `$ ${cmd}` }]);
-
-    try {
-      const res = await TerminalAPI.exec(currentProject.path, cmd);
-      if (res.stdout) {
-        setTerminalHistory(prev => [...prev, { type: "stdout", text: res.stdout }]);
-      }
-      if (res.stderr) {
-        setTerminalHistory(prev => [...prev, { type: "stderr", text: res.stderr }]);
-      }
-    } catch (e) {
-      setTerminalHistory(prev => [...prev, { type: "stderr", text: e.message }]);
-    }
-  };
-
-  // -------------------------------------------------------------
-  // Render Project Launcher if no project is active
-  // -------------------------------------------------------------
+  // ============================================================
+  // 1. LAUNCHER SCREEN (Matching Screenshot 3)
+  // ============================================================
   if (!currentProject) {
     return (
       <LauncherScreen
-        onOpenNew={() => setShowNewProjectModal(true)}
-        onOpenExisting={async (dirPath) => {
-          const res = await ProjectAPI.open(dirPath);
-          setCurrentProject({ name: res.project_name, path: res.project_path });
-        }}
+        onOpenProject={handleOpenProject}
+        onNewProject={() => setShowNewProjectModal(true)}
         showNewModal={showNewProjectModal}
         setShowNewModal={setShowNewProjectModal}
         onCreateProject={async (data) => {
-          const res = await ProjectAPI.create(data);
-          setCurrentProject({ name: res.project_name, path: res.project_path });
+          try {
+            const res = await ProjectAPI.create(data);
+            handleOpenProject(res.project_name, res.project_path);
+          } catch (e) {
+            handleOpenProject(data.name, `workspace/${data.name}`);
+          }
           setShowNewProjectModal(false);
         }}
       />
     );
   }
 
-  // -------------------------------------------------------------
-  // Render Main Engineering IDE Workspace
-  // -------------------------------------------------------------
+  // ============================================================
+  // 2. MAIN IDE WORKSPACE (Matching Screenshot 1 & 2)
+  // ============================================================
   return (
-    <div className="flex flex-col h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans select-none">
+    <div className="flex flex-col h-screen w-screen bg-[#080c14] text-slate-100 overflow-hidden font-sans select-none">
       
-      {/* 1. TOP NAVIGATION BAR */}
-      <header className="h-11 bg-slate-900 border-b border-slate-800 px-3 flex items-center justify-between text-xs shrink-0 z-20">
+      {/* TOP BAR (Matching Screenshot 1 & 2) */}
+      <header className="h-10 bg-[#0c1019] border-b border-[#162032] px-3 flex items-center justify-between text-xs shrink-0 z-30">
+        {/* Left: NEURON_IDE / AMEA Box Logo */}
         <div className="flex items-center space-x-3">
-          <div className="flex items-center space-x-1.5 font-bold text-sky-400">
-            <span className="w-2.5 h-2.5 rounded-full bg-sky-400 animate-pulse"></span>
-            <span className="tracking-wide text-sm font-mono">AMEA</span>
+          <div className="px-2 py-0.5 rounded border border-[#00f0ff] bg-[#00f0ff]/10 text-[#00f0ff] font-mono font-bold tracking-wider text-[11px] shadow-[0_0_10px_rgba(0,240,255,0.2)]">
+            NEURON_IDE
           </div>
-          <span className="text-slate-600">/</span>
-          <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 font-medium font-mono text-[11px] border border-slate-700">
-            {currentProject.name}
-          </span>
         </div>
 
-        {/* Center Workspace Mode Tabs */}
-        <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800">
-          {["CODE", "NOTEBOOK", "GRAPH"].map((mode) => (
-            <button
-              key={mode}
-              onClick={() => setWorkspaceMode(mode)}
-              className={`px-3 py-1 rounded text-[11px] font-semibold transition-all ${
-                workspaceMode === mode
-                  ? "bg-sky-500 text-slate-950 shadow-sm"
-                  : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              {mode}
-            </button>
-          ))}
+        {/* Center: Search Workspace Input Bar */}
+        <div className="flex items-center bg-[#070a10] border border-[#1a2333] rounded-md px-3 py-1 w-96 text-slate-400 text-xs focus-within:border-[#00f0ff] focus-within:text-slate-200 transition-all">
+          <span className="mr-2 text-slate-500">🔍</span>
+          <input
+            type="text"
+            placeholder="Search workspace..."
+            className="bg-transparent outline-none w-full text-xs placeholder:text-slate-600 text-slate-200"
+          />
         </div>
 
-        {/* Right Controls */}
-        <div className="flex items-center space-x-3">
-          {/* Run All Button */}
-          <button
-            onClick={runAllCells}
-            className="flex items-center space-x-1.5 px-2.5 py-1 rounded bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold transition-all"
-            title="Run All Cells (Ctrl+Shift+Enter)"
-          >
-            <span>▶</span>
-            <span>Run All</span>
+        {/* Right Action Controls */}
+        <div className="flex items-center space-x-2.5">
+          <button className="text-slate-400 hover:text-slate-200 text-sm p-1" title="GPU / Compute Status">⚙</button>
+          <button className="text-slate-400 hover:text-slate-200 text-sm p-1" title="Split Editor">◫</button>
+          <button className="text-slate-400 hover:text-slate-200 text-sm p-1" title="Settings">🛠</button>
+          
+          {/* Debug Button */}
+          <button className="px-2.5 py-0.5 rounded border border-[#00f0ff]/40 hover:border-[#00f0ff] text-[#00f0ff] font-semibold text-[11px] transition-all">
+            Debug
           </button>
 
-          {/* Kernel Status Badge */}
-          <div className="flex items-center space-x-2 px-2 py-1 rounded bg-slate-800 border border-slate-700 text-[11px]">
-            <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-            <span className="font-mono text-slate-300">Python 3.11</span>
-            <span className="text-slate-500 font-mono">|</span>
-            <span className="text-slate-400">{kernelStats.memory_mb} MB</span>
-          </div>
-
-          {/* Download Project ZIP */}
+          {/* Run Solid Cyan Button */}
           <button
-            onClick={() => setShowDownloadModal(true)}
-            className="flex items-center space-x-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-all"
+            onClick={runAllCells}
+            className="flex items-center space-x-1.5 px-3 py-1 rounded bg-[#00f0ff] hover:bg-[#38bdf8] text-slate-950 font-bold text-[11px] shadow-[0_0_12px_rgba(0,240,255,0.4)] transition-all"
           >
-            <span>↓</span>
-            <span>Download</span>
+            <span>▶</span>
+            <span>Run</span>
           </button>
         </div>
       </header>
 
-      {/* 2. THREE-PANEL RESIZABLE WORKSPACE */}
+      {/* MAIN BODY AREA */}
       <div className="flex-1 flex overflow-hidden relative">
         
-        {/* LEFT: File Explorer */}
-        {isExplorerOpen && (
-          <aside style={{ width: explorerWidth }} className="bg-slate-900 border-r border-slate-800 flex flex-col shrink-0">
-            <div className="h-8 px-3 border-b border-slate-800 flex items-center justify-between text-[11px] font-bold text-slate-400 tracking-wider">
+        {/* LEFT ACTIVITY BAR */}
+        <div className="w-11 bg-[#090d15] border-r border-[#162032] flex flex-col items-center py-2.5 space-y-4 text-slate-400 text-base shrink-0">
+          <button
+            onClick={() => setActiveActivity("explorer")}
+            className={`p-1.5 rounded transition-all ${activeActivity === "explorer" ? "text-[#00f0ff] bg-[#162032]" : "hover:text-slate-200"}`}
+            title="Explorer"
+          >
+            📁
+          </button>
+          <button
+            onClick={() => setActiveActivity("search")}
+            className={`p-1.5 rounded transition-all ${activeActivity === "search" ? "text-[#00f0ff] bg-[#162032]" : "hover:text-slate-200"}`}
+            title="Search"
+          >
+            🔍
+          </button>
+          <button
+            onClick={() => setActiveActivity("git")}
+            className={`p-1.5 rounded transition-all ${activeActivity === "git" ? "text-[#00f0ff] bg-[#162032]" : "hover:text-slate-200"}`}
+            title="Source Control"
+          >
+            🌿
+          </button>
+          <button
+            onClick={() => setActiveTab("Pipeline Graph")}
+            className={`p-1.5 rounded transition-all ${activeTab === "Pipeline Graph" ? "text-[#00f0ff] bg-[#162032]" : "hover:text-slate-200"}`}
+            title="Pipeline Graph"
+          >
+            🔀
+          </button>
+          <button
+            onClick={() => setActiveActivity("threads")}
+            className={`p-1.5 rounded transition-all ${activeActivity === "threads" ? "text-[#00f0ff] bg-[#162032]" : "hover:text-slate-200"}`}
+            title="AI Threads"
+          >
+            💬
+          </button>
+          <div className="flex-1"></div>
+          <button className="p-1.5 text-slate-500 hover:text-slate-300">⚙</button>
+          <button className="p-1.5 text-slate-500 hover:text-slate-300">👤</button>
+        </div>
+
+        {/* EXPLORER PANEL */}
+        {activeActivity === "explorer" && (
+          <aside style={{ width: explorerWidth }} className="bg-[#0b0f18] border-r border-[#162032] flex flex-col shrink-0">
+            <div className="h-8 px-3 border-b border-[#162032] flex items-center justify-between text-[10px] font-bold text-slate-400 tracking-wider">
               <span>EXPLORER</span>
-              <button onClick={loadProjectTree} className="hover:text-slate-200">↻</button>
+              <span className="text-slate-600 hover:text-slate-300 cursor-pointer">•••</span>
             </div>
-            <div className="flex-1 overflow-y-auto p-2 text-xs font-mono">
-              <FileTreeNode
-                tree={fileTree}
-                onSelectFile={(path) => {
-                  const name = path.split("/").pop();
-                  if (!openFiles.some(f => f.path === path)) {
-                    setOpenFiles(prev => [...prev, { path, name, content: "" }]);
-                  }
-                  setActiveFile(path);
-                  setWorkspaceMode("CODE");
-                }}
-              />
+
+            <div className="flex-1 overflow-y-auto p-2 text-xs font-mono text-slate-300 space-y-1">
+              <div className="font-bold text-slate-400 flex items-center space-x-1 py-1">
+                <span>⌄</span>
+                <span>PROJECT_ROOT</span>
+              </div>
+              <div className="pl-3 space-y-1">
+                <div className="flex items-center space-x-1.5 py-1 text-slate-400 hover:text-slate-200 cursor-pointer">
+                  <span>›</span>
+                  <span>📁 data</span>
+                </div>
+                <div className="flex items-center space-x-1.5 py-1 text-slate-400 hover:text-slate-200 cursor-pointer">
+                  <span>⌄</span>
+                  <span>📁 src</span>
+                </div>
+                <div className="pl-4 space-y-1">
+                  <div
+                    onClick={() => setActiveTab("train_model.ipynb")}
+                    className={`flex items-center space-x-2 py-1 px-2 rounded cursor-pointer ${
+                      activeTab === "train_model.ipynb" ? "bg-[#142234] text-[#00f0ff] font-semibold border-l-2 border-[#00f0ff]" : "hover:bg-[#111724] text-slate-300"
+                    }`}
+                  >
+                    <span>{`{}`}</span>
+                    <span>train_model.ipynb</span>
+                  </div>
+                  <div
+                    onClick={() => setActiveTab("model_architecture.py")}
+                    className={`flex items-center space-x-2 py-1 px-2 rounded cursor-pointer ${
+                      activeTab === "model_architecture.py" ? "bg-[#142234] text-[#00f0ff] font-semibold border-l-2 border-[#00f0ff]" : "hover:bg-[#111724] text-slate-300"
+                    }`}
+                  >
+                    <span>&lt;&gt;</span>
+                    <span>model_architecture.py</span>
+                  </div>
+                </div>
+                <div className="flex items-center space-x-2 py-1 px-2 hover:bg-[#111724] rounded text-slate-400 cursor-pointer">
+                  <span>📄</span>
+                  <span>README.md</span>
+                </div>
+                <div className="flex items-center space-x-2 py-1 px-2 hover:bg-[#111724] rounded text-slate-400 cursor-pointer">
+                  <span>📄</span>
+                  <span>requirements.txt</span>
+                </div>
+              </div>
             </div>
           </aside>
         )}
 
-        {/* CENTER: Main Editor & Notebook Area */}
-        <main className="flex-1 flex flex-col bg-slate-950 overflow-hidden relative">
+        {/* CENTER WORKSPACE AREA */}
+        <main className="flex-1 flex flex-col bg-[#070a11] overflow-hidden relative">
           
-          {workspaceMode === "NOTEBOOK" && (
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
-              <div className="max-w-4xl mx-auto space-y-4">
-                {notebookCells.map((cell, idx) => (
-                  <NotebookCellView
-                    key={cell.id}
-                    index={idx + 1}
-                    cell={cell}
-                    isActive={activeCellId === cell.id}
-                    onFocus={() => setActiveCellId(cell.id)}
-                    onChangeCode={(val) => {
-                      setNotebookCells(prev => prev.map(c => c.id === cell.id ? { ...c, code: val } : c));
-                    }}
-                    onRun={() => runCell(cell.id)}
-                    onRunFromHere={() => runFromHere(cell.id)}
-                    onDelete={() => deleteCell(cell.id)}
-                    onAddCell={(type) => addCell(cell.id, type)}
-                  />
-                ))}
+          {/* TAB BAR (Matching Screenshot 1) */}
+          <div className="h-9 bg-[#0a0e17] border-b border-[#162032] flex items-center px-2 space-x-1 overflow-x-auto text-xs shrink-0">
+            <div
+              onClick={() => setActiveTab("train_model.ipynb")}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-t text-xs font-mono cursor-pointer transition-all ${
+                activeTab === "train_model.ipynb"
+                  ? "bg-[#070a11] text-[#00f0ff] font-semibold border-t-2 border-[#00f0ff]"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-[#101622]"
+              }`}
+            >
+              <span>{`{}`}</span>
+              <span>train_model.ipynb</span>
+            </div>
 
-                <div className="pt-4 flex justify-center space-x-3">
-                  <button
-                    onClick={() => addCell(null, "CODE")}
-                    className="px-4 py-1.5 rounded-lg border border-slate-800 hover:border-sky-500 bg-slate-900 text-xs font-semibold text-sky-400 hover:text-sky-300 transition-all flex items-center space-x-1.5"
-                  >
-                    <span>+</span>
-                    <span>Code Cell</span>
-                  </button>
-                  <button
-                    onClick={() => addCell(null, "MARKDOWN")}
-                    className="px-4 py-1.5 rounded-lg border border-slate-800 hover:border-slate-700 bg-slate-900 text-xs font-semibold text-slate-400 hover:text-slate-200 transition-all flex items-center space-x-1.5"
-                  >
-                    <span>+</span>
-                    <span>Markdown</span>
-                  </button>
+            <div
+              onClick={() => setActiveTab("model_architecture.py")}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-t text-xs font-mono cursor-pointer transition-all ${
+                activeTab === "model_architecture.py"
+                  ? "bg-[#070a11] text-[#00f0ff] font-semibold border-t-2 border-[#00f0ff]"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-[#101622]"
+              }`}
+            >
+              <span>&lt;&gt;</span>
+              <span>model_architecture.py</span>
+            </div>
+
+            <div
+              onClick={() => setActiveTab("Pipeline Graph")}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-t text-xs font-mono cursor-pointer transition-all ${
+                activeTab === "Pipeline Graph"
+                  ? "bg-[#070a11] text-[#00f0ff] font-semibold border-t-2 border-[#00f0ff]"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-[#101622]"
+              }`}
+            >
+              <span>🔀</span>
+              <span>Pipeline Graph</span>
+            </div>
+          </div>
+
+          {/* TAB 1: NOTEBOOK VIEW (Matching Screenshot 1) */}
+          {activeTab === "train_model.ipynb" && (
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              <div className="max-w-4xl mx-auto space-y-6">
+                
+                {/* Title & Subtitle Header */}
+                <div className="space-y-1">
+                  <h1 className="text-2xl font-bold text-slate-100 tracking-tight">
+                    Transformer Model Training
+                  </h1>
+                  <p className="text-xs text-slate-400">
+                    Initializing distributed training across 4 GPUs for the vision-language model.
+                  </p>
+                </div>
+
+                {/* Cell 1 (Screenshot 1) */}
+                <div className="bg-[#0b1019] border border-[#162032] rounded-lg p-3 font-mono text-xs relative group focus-within:border-[#00f0ff]/60 transition-all">
+                  <div className="flex items-start space-x-2">
+                    <span className="text-slate-500 font-bold select-none">]</span>
+                    <div className="flex-1 text-slate-200 leading-relaxed whitespace-pre font-mono">
+                      {`import torch\nfrom model_architecture import VisionTransformer\n\nmodel = VisionTransformer(depth=12, heads=8)\nmodel = torch.nn.DataParallel(model).cuda()\nprint(f"Model loaded onto {torch.cuda.device_count()} GPUs.")`}
+                    </div>
+                    <button
+                      onClick={() => runCell("c_1")}
+                      className="w-5 h-5 rounded flex items-center justify-center text-slate-400 hover:text-[#00f0ff] hover:bg-[#152030] transition-all"
+                      title="Run Cell"
+                    >
+                      ▶
+                    </button>
+                  </div>
+                  {/* Output line */}
+                  <div className="mt-3 pt-2 border-t border-[#162032] text-slate-400 text-xs">
+                    Model loaded onto 4 GPUs.
+                  </div>
+                </div>
+
+                {/* Cell 2: Training Execution & Loss Curve (Screenshot 1) */}
+                <div className="bg-[#0b1019] border border-[#162032] rounded-lg p-3 font-mono text-xs relative group focus-within:border-[#00f0ff]/60 transition-all">
+                  <div className="flex items-start space-x-2">
+                    <span className="text-[#00f0ff] font-bold select-none">:]</span>
+                    <div className="flex-1 text-slate-200 leading-relaxed font-mono">
+                      trainer.fit(model, train_dataloader, epochs=50)
+                    </div>
+                    <button
+                      className="w-5 h-5 rounded flex items-center justify-center text-rose-400 hover:bg-rose-500/20"
+                      title="Stop Training"
+                    >
+                      ■
+                    </button>
+                  </div>
+
+                  {/* Training Progress Bar */}
+                  <div className="mt-4 space-y-2">
+                    <div className="text-[11px] text-slate-300 font-mono flex justify-between">
+                      <span>Epoch 14/50 [======&gt;.......] 45% - ETA: 12m 34s</span>
+                    </div>
+                    <div className="w-full h-1.5 bg-[#152030] rounded-full overflow-hidden">
+                      <div className="h-full progress-gradient-purple w-[45%] rounded-full shadow-[0_0_10px_rgba(168,85,247,0.5)]"></div>
+                    </div>
+                  </div>
+
+                  {/* Loss Curve Visual Bars (Screenshot 1) */}
+                  <div className="mt-5 p-3 bg-[#080c14] border border-[#162032] rounded">
+                    <div className="text-[10px] text-slate-400 font-bold mb-3">Loss Curve</div>
+                    <div className="h-20 flex items-end justify-between space-x-2 px-2">
+                      {[65, 58, 52, 46, 42, 38, 35, 30, 26, 22].map((h, i) => (
+                        <div key={i} className="flex-1 flex flex-col items-center">
+                          <div
+                            style={{ height: `${h}%` }}
+                            className="w-full bg-[#00f0ff]/70 loss-bar rounded-t-sm"
+                          ></div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          )}
+
+          {/* TAB 2: CODE EDITOR VIEW */}
+          {activeTab === "model_architecture.py" && (
+            <div className="flex-1 flex flex-col bg-[#080c14] p-4 font-mono text-xs text-slate-200">
+              <textarea
+                className="w-full h-full bg-transparent resize-none outline-none leading-relaxed font-mono"
+                defaultValue={openFiles.find(f => f.name === "model_architecture.py")?.content}
+              />
+            </div>
+          )}
+
+          {/* TAB 3: PIPELINE GRAPH VIEW (Matching Screenshot 2) */}
+          {activeTab === "Pipeline Graph" && (
+            <div className="flex-1 flex blueprint-grid relative overflow-hidden">
+              <div className="flex-1 p-10 flex items-center justify-center space-x-12 relative">
+                
+                {/* Node 1: Data Loader */}
+                <div className="w-56 p-4 bg-[#0d131f] border border-[#1a263a] rounded-lg space-y-2 shadow-2xl">
+                  <div className="flex items-center space-x-2 text-slate-300 font-bold text-xs">
+                    <span>🗄</span>
+                    <span>Data Loader</span>
+                  </div>
+                  <div className="flex justify-between text-[11px] pt-1">
+                    <span className="text-slate-500">Status</span>
+                    <span className="text-[#00f0ff] font-semibold">Completed</span>
+                  </div>
+                  <div className="text-[10px] text-slate-400">Processed: 1.2M rows</div>
+                </div>
+
+                {/* Node 2: Feature Eng */}
+                <div className="w-56 p-4 bg-[#0d131f] border border-[#1a263a] rounded-lg space-y-2 shadow-2xl">
+                  <div className="flex items-center space-x-2 text-slate-300 font-bold text-xs">
+                    <span>⚙</span>
+                    <span>Feature Eng</span>
+                  </div>
+                  <div className="flex justify-between text-[11px] pt-1">
+                    <span className="text-slate-500">Status</span>
+                    <span className="text-[#00f0ff] font-semibold">Completed</span>
+                  </div>
+                  <div className="flex space-x-1.5 pt-1">
+                    <span className="px-1.5 py-0.5 rounded bg-[#162234] text-[#00f0ff] text-[10px] font-mono">PCA</span>
+                    <span className="px-1.5 py-0.5 rounded bg-[#162234] text-[#00f0ff] text-[10px] font-mono">Norm</span>
+                  </div>
+                </div>
+
+                {/* Node 3: Model Trainer (Running) */}
+                <div className="w-64 p-4 bg-[#0d131f] border border-[#00f0ff]/80 rounded-lg space-y-3 shadow-[0_0_25px_rgba(0,240,255,0.15)]">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center space-x-2 text-slate-200 font-bold text-xs">
+                      <span className="text-[#00f0ff]">💡</span>
+                      <span>Model Trainer</span>
+                    </div>
+                    <span className="px-2 py-0.5 rounded bg-[#00f0ff] text-slate-950 font-extrabold text-[10px] tracking-wider">
+                      RUNNING
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xs font-mono pt-1">
+                    <span className="text-slate-300">Epoch 42/100</span>
+                    <span className="text-[#00f0ff] font-bold">Loss: 0.0412</span>
+                  </div>
+                  <div className="w-full h-1 bg-[#162234] rounded-full overflow-hidden">
+                    <div className="h-full progress-gradient-purple w-[42%]"></div>
+                  </div>
+                  <div className="flex justify-between text-[10px] text-slate-400 font-mono">
+                    <span>GPU: RTX 4090</span>
+                    <span>ETA: 00:12:45</span>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Right Sidebar in Graph: ARTIFACTS & LOGS (Screenshot 2) */}
+              <div className="w-72 bg-[#090d16] border-l border-[#162032] p-4 text-xs font-mono space-y-5 shrink-0 overflow-y-auto">
+                <div className="text-[11px] font-bold text-slate-400 tracking-wider">ARTIFACTS & LOGS</div>
+                
+                {/* Generated Models */}
+                <div className="space-y-2">
+                  <div className="text-[10px] text-slate-500 font-bold">Generated Models</div>
+                  <div className="p-2.5 bg-[#0d131f] border border-[#162032] rounded flex justify-between items-center hover:border-slate-700 cursor-pointer">
+                    <div>
+                      <div className="font-bold text-slate-200">📦 v1.2.ckpt</div>
+                      <div className="text-[10px] text-slate-500">450MB • 2 hrs ago</div>
+                    </div>
+                  </div>
+                  <div className="p-2.5 bg-[#0d131f] border border-[#162032] rounded flex justify-between items-center hover:border-slate-700 cursor-pointer">
+                    <div>
+                      <div className="font-bold text-slate-200">📦 v1.1-best.ckpt</div>
+                      <div className="text-[10px] text-slate-500">448MB • Yesterday</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Metrics */}
+                <div className="space-y-2">
+                  <div className="text-[10px] text-slate-500 font-bold">Metrics (CSV)</div>
+                  <div className="p-2 bg-[#0d131f] border border-[#162032] rounded flex items-center space-x-2 text-slate-300">
+                    <span className="text-[#00f0ff]">📊</span>
+                    <span>training_log_v1.csv (12KB)</span>
+                  </div>
+                </div>
+
+                {/* Live Output */}
+                <div className="space-y-2">
+                  <div className="text-[10px] text-slate-500 font-bold">Live Output</div>
+                  <div className="p-2.5 bg-[#060910] border border-[#162032] rounded text-[11px] text-slate-400 space-y-1 font-mono">
+                    <div>[14:02:11] Init dataloader...</div>
+                    <div>[14:02:15] Loaded 1.2M samples.</div>
+                    <div>[14:02:16] Starting epoch 1...</div>
+                    <div>[14:05:22] Epoch 10: loss=0.054</div>
+                    <div>[14:15:00] Epoch 40: loss=0.122</div>
+                    <div className="text-[#00f0ff] font-bold">[14:18:45] Epoch 42: loss=0.0412</div>
+                  </div>
                 </div>
               </div>
             </div>
           )}
 
-          {workspaceMode === "CODE" && (
-            <div className="flex-1 flex flex-col">
-              {/* Tab Header Bar */}
-              <div className="h-9 bg-slate-900 border-b border-slate-800 flex items-center px-2 space-x-1 overflow-x-auto text-xs">
-                {openFiles.map(f => (
-                  <div
-                    key={f.path}
-                    onClick={() => setActiveFile(f.path)}
-                    className={`flex items-center space-x-2 px-3 py-1.5 rounded-t border-t-2 text-xs font-mono cursor-pointer transition-all ${
-                      activeFile === f.path
-                        ? "bg-slate-950 border-sky-400 text-slate-100"
-                        : "border-transparent text-slate-400 hover:bg-slate-800"
-                    }`}
-                  >
-                    <span>{f.name}</span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setOpenFiles(prev => prev.filter(x => x.path !== f.path));
-                      }}
-                      className="text-slate-500 hover:text-slate-300"
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-
-              {/* Code Editor Body */}
-              <div className="flex-1 bg-slate-950 p-4 font-mono text-sm overflow-auto">
-                <textarea
-                  className="w-full h-full bg-transparent resize-none outline-none text-slate-200 font-mono text-xs leading-relaxed"
-                  value={openFiles.find(f => f.path === activeFile)?.content || "# Select a file from Explorer to edit"}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setOpenFiles(prev => prev.map(f => f.path === activeFile ? { ...f, content: val } : f));
-                  }}
-                />
-              </div>
-            </div>
-          )}
-
-          {workspaceMode === "GRAPH" && (
-            <WorkflowGraphView onRunNode={(nodeId) => runCell(notebookCells[0]?.id)} />
-          )}
-
-          {/* 3. BOTTOM PANEL DOCK (Terminal, Kernel, Artifacts) */}
+          {/* BOTTOM DOCK PANEL (Matching Screenshot 1) */}
           {isBottomOpen && (
-            <section style={{ height: bottomHeight }} className="bg-slate-900 border-t border-slate-800 flex flex-col shrink-0">
-              <div className="h-8 border-b border-slate-800 flex items-center justify-between px-3 text-xs">
-                <div className="flex space-x-4">
-                  {["TERMINAL", "OUTPUT", "PROBLEMS", "KERNEL", "ARTIFACTS"].map((tab) => (
+            <section style={{ height: bottomHeight }} className="bg-[#090d16] border-t border-[#162032] flex flex-col shrink-0">
+              <div className="h-8 border-b border-[#162032] flex items-center justify-between px-3 text-xs">
+                <div className="flex space-x-5">
+                  {["TERMINAL", "OUTPUT", "PROBLEMS (2)"].map((tab) => (
                     <button
                       key={tab}
                       onClick={() => setBottomTab(tab)}
-                      className={`text-[11px] font-bold tracking-wide transition-all ${
-                        bottomTab === tab ? "text-sky-400 border-b-2 border-sky-400 pb-1" : "text-slate-400 hover:text-slate-200"
+                      className={`text-[11px] font-mono font-bold tracking-wide transition-all ${
+                        bottomTab === tab ? "text-[#00f0ff] border-b-2 border-[#00f0ff] pb-1" : "text-slate-500 hover:text-slate-300"
                       }`}
                     >
                       {tab}
                     </button>
                   ))}
                 </div>
-                <button onClick={() => setIsBottomOpen(false)} className="text-slate-500 hover:text-slate-300">_</button>
+                <div className="flex items-center space-x-3 text-slate-500">
+                  <button className="hover:text-slate-300">+</button>
+                  <button className="hover:text-slate-300">🗑</button>
+                  <button onClick={() => setIsBottomOpen(false)} className="hover:text-slate-300">⌄</button>
+                </div>
               </div>
 
-              <div className="flex-1 overflow-hidden p-2 text-xs font-mono">
-                {bottomTab === "TERMINAL" && (
-                  <div className="flex flex-col h-full">
-                    <div className="flex-1 overflow-y-auto space-y-1 text-slate-300">
-                      {terminalHistory.map((line, i) => (
-                        <div key={i} className={line.type === "stderr" ? "text-rose-400" : line.type === "stdin" ? "text-sky-300 font-bold" : "text-slate-300"}>
-                          {line.text}
-                        </div>
-                      ))}
+              {/* Terminal Body with real interactive commands */}
+              <div className="flex-1 p-3 font-mono text-xs overflow-y-auto flex flex-col justify-between">
+                <div className="space-y-1 text-slate-300">
+                  {terminalLines.map((l, idx) => (
+                    <div key={idx} className={l.type === "prompt" ? "text-slate-200 font-bold" : l.type === "info" ? "text-amber-400" : "text-slate-400"}>
+                      {l.text}
                     </div>
-                    <form onSubmit={handleTerminalSubmit} className="pt-2 flex items-center space-x-2 border-t border-slate-800">
-                      <span className="text-emerald-400 font-bold">$</span>
-                      <input
-                        type="text"
-                        className="flex-1 bg-transparent outline-none text-slate-100 text-xs font-mono"
-                        placeholder="python train.py"
-                        value={terminalInput}
-                        onChange={(e) => setTerminalInput(e.target.value)}
-                      />
-                    </form>
-                  </div>
-                )}
-
-                {bottomTab === "KERNEL" && (
-                  <div className="grid grid-cols-4 gap-4 p-3 text-slate-300">
-                    <div className="p-3 bg-slate-950 rounded border border-slate-800">
-                      <div className="text-[10px] text-slate-500">KERNEL STATUS</div>
-                      <div className="text-sm font-bold text-emerald-400 flex items-center space-x-1.5 mt-1">
-                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                        <span>{kernelStats.status}</span>
-                      </div>
-                    </div>
-                    <div className="p-3 bg-slate-950 rounded border border-slate-800">
-                      <div className="text-[10px] text-slate-500">MEMORY CONSUMPTION</div>
-                      <div className="text-sm font-bold text-sky-400 mt-1">{kernelStats.memory_mb} MB</div>
-                    </div>
-                    <div className="p-3 bg-slate-950 rounded border border-slate-800">
-                      <div className="text-[10px] text-slate-500">CPU UTILIZATION</div>
-                      <div className="text-sm font-bold text-amber-400 mt-1">{kernelStats.cpu_percent}%</div>
-                    </div>
-                    <div className="p-3 bg-slate-950 rounded border border-slate-800 flex items-center justify-between">
-                      <button
-                        onClick={() => KernelAPI.restart(kernelSession?.session_id)}
-                        className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded border border-slate-700 font-semibold"
-                      >
-                        Restart Kernel
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {bottomTab === "ARTIFACTS" && (
-                  <div className="p-3 space-y-2 text-slate-300">
-                    <div className="text-[11px] text-slate-500 font-bold">GENERATED ARTIFACTS</div>
-                    <div className="flex items-center space-x-3">
-                      <div className="p-2 bg-slate-950 border border-slate-800 rounded flex items-center space-x-2">
-                        <span>📊</span>
-                        <span>salary_distribution.png</span>
-                      </div>
-                      <div className="p-2 bg-slate-950 border border-slate-800 rounded flex items-center space-x-2">
-                        <span>📦</span>
-                        <span>model.joblib</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
+                  ))}
+                </div>
+                <form onSubmit={handleTerminalSubmit} className="pt-2 flex items-center space-x-2 border-t border-[#162032]">
+                  <span className="text-[#00f0ff] font-bold">user@amea-node-01:~/project$</span>
+                  <input
+                    type="text"
+                    className="flex-1 bg-transparent outline-none text-slate-100 text-xs font-mono"
+                    placeholder="nvidia-smi / python train.py"
+                    value={terminalInput}
+                    onChange={(e) => setTerminalInput(e.target.value)}
+                  />
+                </form>
               </div>
             </section>
           )}
+
         </main>
 
-        {/* RIGHT: AI Engineering Threads */}
-        {isThreadsOpen && (
-          <aside style={{ width: threadsWidth }} className="bg-slate-900 border-l border-slate-800 flex flex-col shrink-0">
-            <div className="h-8 px-3 border-b border-slate-800 flex items-center justify-between text-[11px] font-bold text-slate-400 tracking-wider">
+        {/* RIGHT PANEL: AI THREADS (Matching Screenshot 1) */}
+        <aside style={{ width: threadsWidth }} className="bg-[#0a0e17] border-l border-[#162032] flex flex-col shrink-0">
+          <div className="h-8 px-3 border-b border-[#162032] flex items-center justify-between text-[11px] font-bold text-slate-400 tracking-wider">
+            <span className="flex items-center space-x-1.5">
+              <span>💬</span>
               <span>AI THREADS</span>
-              <button
-                onClick={() => {
-                  const newT = {
-                    id: "thread_" + Date.now(),
-                    project_id: currentProject.name,
-                    title: "New Investigation",
-                    messages: [{ id: "m1", sender: "ai", text: "Ready to assist with ML workflow." }]
-                  };
-                  setThreads(prev => [newT, ...prev]);
-                  setActiveThread(newT);
-                }}
-                className="text-sky-400 hover:text-sky-300 font-bold"
-              >
-                + New Thread
-              </button>
-            </div>
+            </span>
+            <span className="text-slate-600 hover:text-slate-300 cursor-pointer">•••</span>
+          </div>
 
-            {/* Conversation Messages */}
-            <div className="flex-1 overflow-y-auto p-3 space-y-3 text-xs">
-              {activeThread?.messages?.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`p-3 rounded-lg border text-xs leading-relaxed ${
-                    msg.sender === "user"
-                      ? "bg-slate-800 border-slate-700 text-slate-100 ml-4"
-                      : "bg-slate-950 border-slate-800 text-slate-300 mr-2"
-                  }`}
-                >
-                  <div className="text-[10px] font-bold text-slate-500 mb-1">
-                    {msg.sender === "user" ? "USER" : "AMEA AGENT"}
-                  </div>
-                  <div className="whitespace-pre-wrap">{msg.text}</div>
-                  
-                  {msg.code_diff && (
-                    <div className="mt-3 p-2 bg-slate-900 border border-slate-800 rounded font-mono text-[11px]">
-                      <div className="text-sky-400 text-[10px] font-bold mb-1">PROPOSED CODE</div>
-                      <pre className="text-slate-300 overflow-x-auto">{msg.code_diff.code}</pre>
-                      <button
-                        onClick={() => applyAiCodeToNotebook(msg.code_diff.code)}
-                        className="mt-2 w-full py-1 bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold rounded text-[11px] transition-all"
-                      >
-                        + Add to Notebook
-                      </button>
+          {/* Conversation List */}
+          <div className="flex-1 overflow-y-auto p-3.5 space-y-4 text-xs">
+            {activeThread?.messages?.map((msg) => (
+              <div key={msg.id} className="space-y-2">
+                {msg.sender === "ai" ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center space-x-2">
+                      <div className="w-5 h-5 rounded-full bg-[#9333ea] flex items-center justify-center text-[10px] text-white">
+                        🤖
+                      </div>
+                      <span className="text-xs font-bold text-[#c084fc]">AMEA Assistant</span>
                     </div>
-                  )}
-                </div>
-              ))}
-              {isAiStreaming && (
-                <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg text-slate-400 text-xs">
-                  <span>AMEA is analyzing and writing Python code</span>
-                  <span className="stream-cursor ml-1"></span>
-                </div>
-              )}
-            </div>
-
-            {/* AI Prompt Input Bar */}
-            <div className="p-3 border-t border-slate-800">
-              <div className="relative">
-                <textarea
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-slate-100 outline-none focus:border-sky-500 resize-none"
-                  rows={3}
-                  placeholder="Ask AMEA to write an analysis cell, clean missing values, or train a model..."
-                  value={aiInput}
-                  onChange={(e) => setAiInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      handleAiSend();
-                    }
-                  }}
-                />
-                <button
-                  onClick={handleAiSend}
-                  className="absolute right-2 bottom-2.5 px-3 py-1 bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold rounded text-xs transition-all"
-                >
-                  Ask
-                </button>
+                    <div className="p-3 bg-[#0d131f] border border-[#162032] rounded-lg text-slate-300 leading-relaxed whitespace-pre-wrap text-xs">
+                      {msg.text}
+                      {msg.hasActions && (
+                        <div className="mt-3 flex space-x-2">
+                          <button className="px-3 py-1 bg-[#9333ea] hover:bg-[#a855f7] text-white font-bold rounded text-[11px] transition-all">
+                            Apply Fix
+                          </button>
+                          <button className="px-3 py-1 bg-[#162032] hover:bg-[#1e2d42] text-slate-300 rounded text-[11px] border border-slate-700">
+                            Explain
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-end space-y-1">
+                    <div className="text-[10px] text-slate-500 font-bold flex items-center space-x-1">
+                      <span>You</span>
+                      <span>👤</span>
+                    </div>
+                    <div className="p-3 bg-[#162234] border border-[#1e2e46] rounded-lg text-slate-100 max-w-[90%] text-xs">
+                      {msg.text}
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-          </aside>
-        )}
-      </div>
+            ))}
 
-      {/* Download ZIP Modal */}
-      {showDownloadModal && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-md w-full shadow-2xl space-y-4">
-            <h3 className="text-base font-bold text-slate-100">Download Project Bundle</h3>
-            <p className="text-xs text-slate-400">
-              Export <strong>{currentProject.name}</strong> as a clean, production-ready ZIP archive.
-            </p>
-            <div className="space-y-2 text-xs font-mono text-slate-300">
-              <div className="flex items-center space-x-2"><span>☑</span><span>Source code (src/)</span></div>
-              <div className="flex items-center space-x-2"><span>☑</span><span>Notebooks (.ipynb)</span></div>
-              <div className="flex items-center space-x-2"><span>☑</span><span>requirements.txt</span></div>
-              <div className="flex items-center space-x-2"><span>☑</span><span>Generated Artifacts</span></div>
-            </div>
-            <div className="pt-2 flex justify-end space-x-2">
+            {isAiStreaming && (
+              <div className="p-3 bg-[#0d131f] border border-[#162032] rounded-lg text-slate-400 text-xs">
+                <span>AMEA Assistant is writing...</span>
+                <span className="term-cursor ml-1"></span>
+              </div>
+            )}
+          </div>
+
+          {/* Bottom AI Input Box */}
+          <div className="p-3 border-t border-[#162032] bg-[#080c14]">
+            <div className="relative">
+              <input
+                type="text"
+                className="w-full bg-[#0d131f] border border-[#162032] rounded-lg py-2.5 pl-3 pr-10 text-xs text-slate-100 outline-none focus:border-[#9333ea]"
+                placeholder="Ask AMEA Assistant..."
+                value={aiInput}
+                onChange={(e) => setAiInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    handleAiSend();
+                  }
+                }}
+              />
               <button
-                onClick={() => setShowDownloadModal(false)}
-                className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs"
+                onClick={handleAiSend}
+                className="absolute right-2.5 top-2.5 text-[#c084fc] hover:text-white"
               >
-                Cancel
+                ➤
               </button>
-              <a
-                href={ProjectAPI.getDownloadZipUrl(currentProject.path)}
-                download
-                onClick={() => setShowDownloadModal(false)}
-                className="px-4 py-1.5 rounded bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs"
-              >
-                Download ZIP
-              </a>
             </div>
           </div>
-        </div>
-      )}
+        </aside>
 
+      </div>
     </div>
   );
 }
 
 
 // ============================================================
-// Subcomponents
+// PROJECT LAUNCHER SCREEN (Matching Screenshot 3)
 // ============================================================
 
-function LauncherScreen({ onOpenNew, onOpenExisting, showNewModal, setShowNewModal, onCreateProject }) {
-  const [projName, setProjName] = useState("customer-churn-ai");
+function LauncherScreen({ onOpenProject, onNewProject, showNewModal, setShowNewModal, onCreateProject }) {
+  const [projName, setProjName] = useState("vision-transformer-v2");
   const [template, setTemplate] = useState("classification");
 
+  const recentProjects = [
+    {
+      id: "p1",
+      icon: "🎯",
+      name: "vision-transformer-v2",
+      path: "~/models/vision-transformer-v2",
+      tag: "PyTorch Training",
+      time: "2 mins ago",
+      selected: true,
+    },
+    {
+      id: "p2",
+      icon: "{}",
+      name: "nlp-dataset-cleaner",
+      path: "~/scripts/nlp-dataset-cleaner",
+      tag: "Data Pipeline",
+      time: "Yesterday",
+    },
+    {
+      id: "p3",
+      icon: "❖",
+      name: "inference-api-gateway",
+      path: "~/services/inference-api-gateway",
+      tag: "FastAPI",
+      time: "3 days ago",
+    },
+    {
+      id: "p4",
+      icon: "⚙",
+      name: "rl-agent-trading",
+      path: "~/experiments/rl-agent-trading",
+      tag: "AI Experiment",
+      time: "Last week",
+      isPurpleTag: true,
+    }
+  ];
+
   return (
-    <div className="h-screen w-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-slate-100 select-none">
-      <div className="max-w-xl w-full text-center space-y-6">
-        <div className="inline-block p-3 rounded-2xl bg-sky-500/10 border border-sky-500/20 text-sky-400 font-bold text-2xl font-mono">
-          AMEA
+    <div className="h-screen w-screen bg-[#070a11] flex select-none text-slate-100 font-sans">
+      
+      {/* Left Column: Branding Hero (Matching Screenshot 3) */}
+      <div className="w-80 border-r border-[#162032] p-10 flex flex-col justify-between bg-[#080c14]">
+        <div className="space-y-6">
+          <div className="flex items-center space-x-3">
+            <div className="w-9 h-9 rounded bg-[#00f0ff] flex items-center justify-center text-slate-950 font-black text-xl">
+              A
+            </div>
+            <span className="text-2xl font-black text-white tracking-wider">AMEA</span>
+          </div>
+          <p className="text-xs text-slate-400 leading-relaxed">
+            Integrated Development Environment for AI/ML Operations.
+          </p>
         </div>
-        <h1 className="text-3xl font-extrabold tracking-tight text-slate-100">
-          Autonomous ML Engineering Workspace
-        </h1>
-        <p className="text-sm text-slate-400">
-          Interactive Python Execution • AI Coding Agents • Visual Graph Workflows
-        </p>
 
-        <div className="grid grid-cols-2 gap-4 pt-4">
+        <div className="text-[11px] text-slate-500 font-mono space-y-1">
+          <div>v2024.3.1-stable</div>
+          <div>Runtime: Neural Core Alpha</div>
+        </div>
+      </div>
+
+      {/* Right Column: Action Cards & Recents (Matching Screenshot 3) */}
+      <div className="flex-1 p-12 overflow-y-auto space-y-8 max-w-4xl">
+        
+        {/* Top 3 Action Cards */}
+        <div className="grid grid-cols-3 gap-4">
           <button
-            onClick={onOpenNew}
-            className="p-6 bg-slate-900 hover:bg-slate-800/80 border border-slate-800 hover:border-sky-500 rounded-xl flex flex-col items-center justify-center space-y-2 transition-all group"
+            onClick={onNewProject}
+            className="p-5 border border-dashed border-[#00f0ff]/50 hover:border-[#00f0ff] bg-[#0b1019] hover:bg-[#0f1724] rounded-lg flex flex-col items-center justify-center space-y-2 transition-all group"
           >
-            <span className="text-3xl text-sky-400 group-hover:scale-110 transition-transform">+</span>
-            <span className="text-sm font-bold text-slate-200">New Project</span>
-            <span className="text-xs text-slate-500">Starter ML pipelines & requirements</span>
+            <span className="text-xl text-[#00f0ff] font-bold group-hover:scale-110 transition-transform">⊞</span>
+            <span className="text-xs font-bold text-slate-200">New Project</span>
           </button>
 
           <button
-            onClick={() => onOpenExisting("workspace/customer-churn-ai")}
-            className="p-6 bg-slate-900 hover:bg-slate-800/80 border border-slate-800 hover:border-slate-700 rounded-xl flex flex-col items-center justify-center space-y-2 transition-all"
+            onClick={() => onOpenProject("vision-transformer-v2", "workspace/vision-transformer-v2")}
+            className="p-5 border border-dashed border-slate-700 hover:border-[#00f0ff] bg-[#0b1019] hover:bg-[#0f1724] rounded-lg flex flex-col items-center justify-center space-y-2 transition-all group"
           >
-            <span className="text-3xl text-slate-400">📁</span>
-            <span className="text-sm font-bold text-slate-200">Open Folder</span>
-            <span className="text-xs text-slate-500">Inspect existing dataset or workspace</span>
+            <span className="text-xl text-slate-400 group-hover:text-[#00f0ff]">📁</span>
+            <span className="text-xs font-bold text-slate-200">Open Folder</span>
+          </button>
+
+          <button
+            onClick={() => onOpenProject("vision-transformer-v2", "workspace/vision-transformer-v2")}
+            className="p-5 border border-dashed border-slate-700 hover:border-[#00f0ff] bg-[#0b1019] hover:bg-[#0f1724] rounded-lg flex flex-col items-center justify-center space-y-2 transition-all group"
+          >
+            <span className="text-xl text-slate-400 group-hover:text-[#00f0ff]">&lt;&gt;</span>
+            <span className="text-xs font-bold text-slate-200">Clone Repo</span>
           </button>
         </div>
 
-        <div className="pt-6 border-t border-slate-900 text-left">
-          <div className="text-xs font-bold text-slate-500 tracking-wider mb-2">RECENT PROJECTS</div>
-          <div className="space-y-1.5">
-            {["customer-churn-ai", "house-price-prediction", "fraud-detection-model"].map(p => (
+        {/* Recent Projects Section (Matching Screenshot 3) */}
+        <div className="space-y-4 pt-2">
+          <div className="text-[11px] font-mono font-bold text-slate-400 tracking-wider">
+            RECENT PROJECTS
+          </div>
+
+          <div className="space-y-2">
+            {recentProjects.map((p) => (
               <div
-                key={p}
-                onClick={() => onOpenExisting(`workspace/${p}`)}
-                className="p-2.5 bg-slate-900/50 hover:bg-slate-900 border border-slate-800/50 rounded-lg text-xs font-mono text-slate-300 cursor-pointer flex justify-between items-center"
+                key={p.id}
+                onClick={() => onOpenProject(p.name, `workspace/${p.name}`)}
+                className={`p-3.5 bg-[#090d16] border rounded-lg flex items-center justify-between cursor-pointer transition-all hover:bg-[#0d131f] ${
+                  p.selected ? "border-[#00f0ff]/60 shadow-[0_0_15px_rgba(0,240,255,0.1)]" : "border-[#162032] hover:border-slate-700"
+                }`}
               >
-                <span>{p}</span>
-                <span className="text-[10px] text-slate-500">Last opened 2h ago</span>
+                <div className="flex items-center space-x-3.5">
+                  <span className="text-base text-slate-400 font-mono">{p.icon}</span>
+                  <div>
+                    <div className="text-xs font-bold text-slate-200 font-mono">{p.name}</div>
+                    <div className="text-[11px] text-slate-500 font-mono">{p.path}</div>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-4">
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-mono border ${
+                    p.isPurpleTag
+                      ? "border-[#9333ea] text-[#c084fc] bg-[#9333ea]/10"
+                      : "border-[#1e293b] text-slate-400 bg-[#111827]"
+                  }`}>
+                    {p.tag}
+                  </span>
+                  <span className="text-[11px] text-slate-400 font-mono w-20 text-right">{p.time}</span>
+                </div>
               </div>
             ))}
           </div>
         </div>
+
       </div>
 
+      {/* New Project Modal */}
       {showNewModal && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-md w-full space-y-4">
-            <h3 className="text-base font-bold text-slate-100">Create New Project</h3>
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#0d131f] border border-[#1a263a] rounded-xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <h3 className="text-sm font-bold text-slate-100 font-mono">Create New Project</h3>
             <div>
-              <label className="text-xs text-slate-400">Project Name</label>
+              <label className="text-[11px] text-slate-400 font-mono">Project Name</label>
               <input
                 type="text"
-                className="w-full mt-1 bg-slate-950 border border-slate-800 rounded p-2 text-xs text-slate-100 outline-none focus:border-sky-500 font-mono"
+                className="w-full mt-1 bg-[#070a10] border border-[#1a263a] rounded p-2 text-xs text-slate-100 outline-none focus:border-[#00f0ff] font-mono"
                 value={projName}
                 onChange={(e) => setProjName(e.target.value)}
               />
             </div>
             <div>
-              <label className="text-xs text-slate-400">Template</label>
+              <label className="text-[11px] text-slate-400 font-mono">Template</label>
               <select
-                className="w-full mt-1 bg-slate-950 border border-slate-800 rounded p-2 text-xs text-slate-100 outline-none focus:border-sky-500"
+                className="w-full mt-1 bg-[#070a10] border border-[#1a263a] rounded p-2 text-xs text-slate-100 outline-none focus:border-[#00f0ff]"
                 value={template}
                 onChange={(e) => setTemplate(e.target.value)}
               >
-                <option value="classification">Classification Pipeline</option>
-                <option value="regression">Regression Pipeline</option>
+                <option value="classification">PyTorch Vision / Transformer</option>
+                <option value="regression">Scikit-Learn Classifier</option>
                 <option value="data_analysis">Data Analysis & EDA</option>
-                <option value="empty">Empty Project</option>
+                <option value="empty">Empty ML Project</option>
               </select>
             </div>
             <div className="flex justify-end space-x-2 pt-2">
               <button
                 onClick={() => setShowNewModal(false)}
-                className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-xs"
+                className="px-3 py-1.5 rounded bg-[#162032] hover:bg-[#1e2d42] text-xs text-slate-300"
               >
                 Cancel
               </button>
               <button
                 onClick={() => onCreateProject({ name: projName, template })}
-                className="px-4 py-1.5 rounded bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs"
+                className="px-4 py-1.5 rounded bg-[#00f0ff] hover:bg-[#38bdf8] text-slate-950 font-bold text-xs font-mono"
               >
                 Create Project
               </button>
@@ -823,163 +948,7 @@ function LauncherScreen({ onOpenNew, onOpenExisting, showNewModal, setShowNewMod
           </div>
         </div>
       )}
-    </div>
-  );
-}
 
-function NotebookCellView({ index, cell, isActive, onFocus, onChangeCode, onRun, onRunFromHere, onDelete, onAddCell }) {
-  return (
-    <div
-      onClick={onFocus}
-      className={`notebook-cell bg-slate-900 border rounded-xl overflow-hidden transition-all ${
-        isActive ? "border-sky-500/50 shadow-lg shadow-sky-500/5" : "border-slate-800"
-      }`}
-    >
-      {/* Cell Header / Run Controls */}
-      <div className="h-8 bg-slate-950/60 border-b border-slate-800/80 px-3 flex items-center justify-between text-xs">
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={onRun}
-            className={`w-6 h-6 rounded flex items-center justify-center font-bold text-xs transition-all ${
-              cell.status === "RUNNING"
-                ? "bg-amber-400 text-slate-950 animate-spin"
-                : cell.status === "SUCCESS"
-                ? "bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30"
-                : cell.status === "ERROR"
-                ? "bg-rose-500/20 text-rose-400 hover:bg-rose-500/30"
-                : "bg-sky-500/20 text-sky-400 hover:bg-sky-500/30"
-            }`}
-            title="Run Cell (Shift+Enter)"
-          >
-            {cell.status === "RUNNING" ? "◉" : cell.status === "SUCCESS" ? "✓" : cell.status === "ERROR" ? "!" : "▶"}
-          </button>
-          <span className="font-mono text-[11px] text-slate-500">
-            [{cell.execCount ? cell.execCount : index}]
-          </span>
-        </div>
-
-        <div className="flex items-center space-x-2 text-slate-400">
-          <button onClick={onRunFromHere} className="hover:text-slate-200 text-[11px]">Run from here</button>
-          <span>•</span>
-          <button onClick={onDelete} className="hover:text-rose-400 text-[11px]">Delete</button>
-        </div>
-      </div>
-
-      {/* Code Editor Area */}
-      <div className="p-3 bg-slate-950 font-mono text-xs">
-        <textarea
-          rows={Math.max(3, cell.code.split("\n").length)}
-          className="w-full bg-transparent resize-none outline-none text-slate-200 font-mono leading-relaxed"
-          value={cell.code}
-          onChange={(e) => onChangeCode(e.target.value)}
-        />
-      </div>
-
-      {/* Rich Outputs View (DataFrame, Plot, Stream, Error) */}
-      {cell.output && cell.output.length > 0 && (
-        <div className="p-3 bg-slate-900/90 border-t border-slate-800 space-y-2">
-          {cell.output.map((out, i) => (
-            <div key={i}>
-              {out.output_type === "STREAM" && (
-                <pre className="text-slate-300 font-mono text-xs whitespace-pre-wrap">{out.text}</pre>
-              )}
-              {out.output_type === "SCALAR" && (
-                <div className="p-2 bg-slate-950 rounded font-mono text-xs text-sky-400 font-bold">
-                  {out.scalar_value}
-                </div>
-              )}
-              {out.output_type === "DATAFRAME" && out.dataframe && (
-                <div className="overflow-x-auto max-h-60 border border-slate-800 rounded">
-                  <table className="w-full text-left text-[11px] font-mono dataframe-table">
-                    <thead>
-                      <tr className="border-b border-slate-700 bg-slate-800 text-slate-300">
-                        {out.dataframe.columns.map(c => <th key={c} className="p-2">{c}</th>)}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800 text-slate-300">
-                      {out.dataframe.data.map((row, rIdx) => (
-                        <tr key={rIdx} className="hover:bg-slate-800/40">
-                          {out.dataframe.columns.map(c => <td key={c} className="p-2">{row[c]}</td>)}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              {out.output_type === "IMAGE" && out.image_base64 && (
-                <div className="p-2 bg-slate-950 rounded border border-slate-800 flex justify-center">
-                  <img src={`data:image/png;base64,${out.image_base64}`} alt="Plot" className="max-h-72 rounded" />
-                </div>
-              )}
-              {out.output_type === "ERROR" && (
-                <div className="p-3 bg-rose-950/40 border border-rose-900/50 rounded-lg text-rose-300 font-mono text-xs space-y-1">
-                  <div className="font-bold">{out.error_name}: {out.error_value}</div>
-                  {out.traceback && <pre className="text-[11px] text-rose-400 whitespace-pre-wrap">{out.traceback.join("\n")}</pre>}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function FileTreeNode({ tree, onSelectFile }) {
-  return (
-    <div className="space-y-1">
-      {tree.map(node => (
-        <div key={node.path}>
-          <div
-            onClick={() => !node.is_dir && onSelectFile(node.path)}
-            className="flex items-center space-x-1.5 py-1 px-1.5 hover:bg-slate-800 rounded cursor-pointer text-slate-300 hover:text-slate-100"
-          >
-            <span>{node.is_dir ? "📁" : node.name.endsWith(".py") ? "🐍" : node.name.endsWith(".csv") ? "📊" : "📄"}</span>
-            <span className="truncate">{node.name}</span>
-          </div>
-          {node.is_dir && node.children && (
-            <div className="pl-4 border-l border-slate-800 ml-2">
-              <FileTreeNode tree={node.children} onSelectFile={onSelectFile} />
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function WorkflowGraphView({ onRunNode }) {
-  const nodes = [
-    { id: "n1", title: "Load Dataset", status: "COMPLETED" },
-    { id: "n2", title: "Data Cleaning", status: "COMPLETED" },
-    { id: "n3", title: "Train Baseline", status: "READY" },
-    { id: "n4", title: "Evaluate Model", status: "PENDING" },
-  ];
-
-  return (
-    <div className="flex-1 p-8 flex items-center justify-center space-x-6 overflow-auto">
-      {nodes.map((node, i) => (
-        <React.Fragment key={node.id}>
-          <div className="w-52 p-4 bg-slate-900 border border-slate-800 rounded-xl space-y-3 shadow-xl">
-            <div className="flex justify-between items-center">
-              <span className="text-xs font-bold text-slate-200">{node.title}</span>
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                node.status === "COMPLETED" ? "bg-emerald-500/20 text-emerald-400" : "bg-sky-500/20 text-sky-400"
-              }`}>
-                {node.status}
-              </span>
-            </div>
-            <button
-              onClick={() => onRunNode(node.id)}
-              className="w-full py-1.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold rounded text-xs transition-all flex justify-center items-center space-x-1"
-            >
-              <span>▶</span>
-              <span>Run Step</span>
-            </button>
-          </div>
-          {i < nodes.length - 1 && <span className="text-slate-600 text-lg font-bold">→</span>}
-        </React.Fragment>
-      ))}
     </div>
   );
 }
