@@ -5,6 +5,8 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
+from amea.execution.failure_analyzer import FailureDiagnosis
+
 
 class ExperimentStatus(str, Enum):
     QUEUED = "QUEUED"
@@ -13,6 +15,7 @@ class ExperimentStatus(str, Enum):
     FAILED = "FAILED"
     TIMEOUT = "TIMEOUT"
     REJECTED = "REJECTED"
+    SECURITY_BLOCKED = "SECURITY_BLOCKED"
 
 
 class ResourceUsage(BaseModel):
@@ -24,7 +27,7 @@ class ResourceUsage(BaseModel):
 
 class ExecutionError(BaseModel):
     """Structured error details when execution fails."""
-    error_type: str  # "timeout", "syntax_error", "memory_limit", "runtime_error"
+    error_type: str  # "timeout", "syntax_error", "memory_limit", "runtime_error", "security_violation"
     message: str
     traceback: Optional[str] = None
 
@@ -37,6 +40,7 @@ class ModelExecutionConfiguration(BaseModel):
     script_content: str
     hyperparameters: Dict[str, Any] = Field(default_factory=dict)
     preprocessing_steps: List[str] = Field(default_factory=list)
+    dependencies: List[str] = Field(default_factory=lambda: ["numpy", "pandas", "scikit-learn", "joblib"])
     dataset_path: str
     target_column: str
     primary_metric: str
@@ -62,6 +66,7 @@ class ExperimentResult(BaseModel):
     stderr: str = ""
     exit_code: int = 0
     error: Optional[ExecutionError] = None
+    failure_diagnosis: Optional[FailureDiagnosis] = None
     workspace_dir: str = ""
     artifact_paths: List[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

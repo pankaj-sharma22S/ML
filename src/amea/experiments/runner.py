@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 from typing import Optional
+from amea.execution.failure_analyzer import FailureCategory
 from amea.execution.subprocess_executor import SubprocessExecutor
 from amea.experiments.models import (
     ExecutionError,
@@ -32,35 +33,49 @@ class ExperimentRunner:
         if data_path.exists():
             additional_files[data_path.name] = data_path.read_text(encoding="utf-8")
 
-        # Execute script
+        # Execute script in secure subprocess sandbox
         res = self.executor.execute_script(
             run_id=config.experiment_id,
             script_content=config.script_content,
             additional_files=additional_files,
+            dependencies=config.dependencies,
+            primary_metric_name=config.primary_metric,
             timeout_seconds=config.timeout_seconds,
         )
 
-        # Process metrics
         extracted_metrics = res.metrics_extracted
         primary_val = extracted_metrics.get(config.primary_metric, 0.0)
 
-        # If execution succeeded but no metrics parsed, mark failed
-        if res.is_success and not extracted_metrics:
-            status = ExperimentStatus.FAILED
-            error = ExecutionError(
-                error_type="metrics_parsing_error",
-                message="Script exited with code 0 but emitted no valid __AMEA_METRICS__ payload.",
-            )
-        elif not res.is_success:
-            if res.exit_code == -1:
+        # Map diagnosis category to experiment status
+        diag = res.failure_diagnosis
+        if diag:
+            if diag.category == FailureCategory.SUCCESS:
+                status = ExperimentStatus.SUCCESS
+                error = None
+            elif diag.category == FailureCategory.SECURITY_VIOLATION:
+                status = ExperimentStatus.SECURITY_BLOCKED
+                error = ExecutionError(
+                    error_type="security_violation",
+                    message=diag.root_cause,
+                    traceback=diag.traceback_summary,
+                )
+            elif diag.category == FailureCategory.TIMEOUT:
                 status = ExperimentStatus.TIMEOUT
-                error = ExecutionError(error_type="timeout", message=f"Experiment exceeded {config.timeout_seconds}s limit.")
+                error = ExecutionError(
+                    error_type="timeout",
+                    message=diag.root_cause,
+                    traceback=diag.traceback_summary,
+                )
             else:
                 status = ExperimentStatus.FAILED
-                error = ExecutionError(error_type="runtime_error", message=res.stderr[:500])
+                error = ExecutionError(
+                    error_type=diag.category.value.lower(),
+                    message=diag.root_cause,
+                    traceback=diag.traceback_summary,
+                )
         else:
-            status = ExperimentStatus.SUCCESS
-            error = None
+            status = ExperimentStatus.SUCCESS if res.is_success else ExperimentStatus.FAILED
+            error = None if res.is_success else ExecutionError(error_type="runtime_error", message=res.stderr[:500])
 
         return ExperimentResult(
             experiment_id=config.experiment_id,
@@ -68,8 +83,8 @@ class ExperimentRunner:
             model_family=config.model_family,
             model_class_name=config.model_class_name,
             cv_metrics_mean=extracted_metrics,
-            cv_metrics_std={config.primary_metric: 0.01},
-            train_metrics_mean={config.primary_metric: min(1.0, primary_val + 0.04)},
+            cv_metrics_std={config.primary_metric: 0.01} if extracted_metrics else {},
+            train_metrics_mean={config.primary_metric: min(1.0, primary_val + 0.04)} if extracted_metrics else {},
             resource_usage=ResourceUsage(
                 cpu_percent=50.0,
                 peak_memory_mb=res.peak_memory_mb or 128.0,
@@ -80,6 +95,7 @@ class ExperimentRunner:
             stderr=res.stderr,
             exit_code=res.exit_code,
             error=error,
+            failure_diagnosis=diag,
             workspace_dir=str(exp_dir.resolve()),
             artifact_paths=res.artifacts_created,
         )
