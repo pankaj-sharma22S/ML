@@ -156,6 +156,33 @@ class OrchestratorNodes:
             is_classification=is_classification,
         )
 
+        # Run DataCleaningAgent to produce clean dataset version
+        from amea.data_cleaning.agent import DataCleaningAgent
+        from amea.data_intelligence.models import DataTreatmentCandidate
+        
+        treatment_candidates = []
+        for col_name, cp in state.data_profile.columns.items():
+            if col_name == state.task_spec.target_column:
+                continue
+            if cp.null_count > 0:
+                treatment_candidates.append(
+                    DataTreatmentCandidate(
+                        strategy_id=f"impute_{col_name}",
+                        target_columns=[col_name],
+                        treatment_type="imputation",
+                        proposed_transformer="AdaptiveImputerTransformer",
+                        rationale=f"Impute missing values in {col_name} to guarantee numeric estimator stability",
+                    )
+                )
+
+        cleaning_agent = DataCleaningAgent()
+        cleaned_artifact = cleaning_agent.clean_dataset(
+            raw_dataset_path=state.data_profile.dataset_path,
+            treatment_candidates=treatment_candidates,
+            target_column=state.task_spec.target_column,
+        )
+        cleaned_df = pd.read_csv(cleaned_artifact.cleaned_dataset_path)
+
         # Run DataValidationAgent for independent pre-modeling Quality Gate audit
         from amea.data_validation.agent import DataValidationAgent
         from amea.data_validation.models import QualityGateVerdict
@@ -163,7 +190,7 @@ class OrchestratorNodes:
 
         gate_report = val_agent.evaluate_quality_gate(
             raw_df=df,
-            cleaned_df=df,
+            cleaned_df=cleaned_df,
             dataset_name=Path(state.data_profile.dataset_path).stem,
             target_column=state.task_spec.target_column,
         )
@@ -175,6 +202,7 @@ class OrchestratorNodes:
             "eda_findings_count": len(eda_report.findings),
             "quality_gate_verdict": gate_report.verdict.value,
             "quality_gate_passed": (gate_report.verdict != QualityGateVerdict.REJECTED_BLOCKING),
+            "cleaned_dataset_path": cleaned_artifact.cleaned_dataset_path,
         }
 
         # Convert findings to concise summaries for state
@@ -184,7 +212,6 @@ class OrchestratorNodes:
             patch = StatePatch(
                 author_component="DataValidationAgent",
                 data_quality_report=quality_report,
-                eda_findings=findings_summaries,
                 target_phase=LifecyclePhase.TERMINATED,
                 termination_reason=f"Quality Gate Rejected: {'; '.join(gate_report.blocking_reasons)}",
                 is_terminal=True,
@@ -263,7 +290,10 @@ class OrchestratorNodes:
         registry = ModelSpecialistRegistry()
         runner = ExperimentRunner()
         records: List[RegisteredExperimentRecord] = []
-        dataset_path = state.data_profile.dataset_path if state.data_profile else "data.csv"
+        
+        # Use cleaned dataset path if created by DataCleaningAgent
+        cleaned_ds = state.data_quality_report.get("cleaned_dataset_path") if state.data_quality_report else None
+        dataset_path = cleaned_ds if (cleaned_ds and Path(cleaned_ds).exists()) else (state.data_profile.dataset_path if state.data_profile else "data.csv")
 
         for exp_config in state.experiment_queue:
             # 1. Resolve Model Specialist via Registry
