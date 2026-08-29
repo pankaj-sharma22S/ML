@@ -1,4 +1,4 @@
-import { ProjectAPI, KernelAPI, NotebookAPI, ThreadAPI, AIAPI, TerminalAPI } from "/static/js/api.js";
+import { AuthAPI, TokenStorage, ProjectAPI, KernelAPI, NotebookAPI, ThreadAPI, AIAPI, TerminalAPI, OrchestratorAPI, EnvironmentAPI } from "/static/js/api.js";
 
 const { useState, useEffect, useRef } = React;
 
@@ -7,6 +7,11 @@ const { useState, useEffect, useRef } = React;
 // ============================================================
 
 export default function App() {
+  // Authentication State
+  const [user, setUser] = useState(null); // { id, email, full_name }
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authRequiredPrompt, setAuthRequiredPrompt] = useState("");
+
   // Navigation / View State
   const [currentProject, setCurrentProject] = useState(null); // { name, path }
   const [activeTab, setActiveTab] = useState("train_model.ipynb"); // "train_model.ipynb", "model_architecture.py", "Pipeline Graph"
@@ -105,6 +110,17 @@ export default function App() {
   const [threadsWidth, setThreadsWidth] = useState(340);
   const [bottomHeight, setBottomHeight] = useState(200);
 
+  // Restore Session on Mount
+  useEffect(() => {
+    AuthAPI.me()
+      .then((res) => {
+        if (res && res.user) {
+          setUser(res.user);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // Initialize Thread & Tree
   useEffect(() => {
     if (threads.length > 0 && !activeThread) {
@@ -190,7 +206,7 @@ export default function App() {
     }
   };
 
-  // AI Send Handler
+  // AI Send Handler (Public Chat + Protected ML Gate)
   const handleAiSend = async () => {
     if (!aiInput.trim() || isAiStreaming) return;
     const promptText = aiInput;
@@ -203,12 +219,27 @@ export default function App() {
     setIsAiStreaming(true);
 
     try {
+      // 1. Try public conversational assistant endpoint
+      const pubRes = await AuthAPI.publicChat(promptText);
+      if (pubRes && pubRes.requires_auth && !user) {
+        setAuthRequiredPrompt("Sign in with Supabase Auth to execute and save ML models.");
+        setShowAuthModal(true);
+        const authNotice = {
+          id: "m_ai_" + Date.now(),
+          sender: "ai",
+          text: pubRes.message,
+        };
+        setActiveThread({ ...updatedThread, messages: [...updatedMessages, authNotice] });
+        return;
+      }
+
+      // 2. Normal code generation
       const res = await AIAPI.generateCell(promptText, ["model", "df"]);
       const aiMsg = {
         id: "m_ai_" + Date.now(),
         sender: "ai",
-        text: `Here is the suggested analysis for **"${promptText}"**:\n\n${res.explanation}`,
-        code_diff: { code: res.code },
+        text: `Here is the suggested analysis for **"${promptText}"**:\n\n${res.explanation || pubRes.message || ""}`,
+        code_diff: res.code ? { code: res.code } : null,
         hasActions: true,
       };
       setActiveThread({ ...updatedThread, messages: [...updatedMessages, aiMsg] });
@@ -223,6 +254,12 @@ export default function App() {
   const [orchestratorResult, setOrchestratorResult] = useState(null);
 
   const runAutonomousMLEngineer = async () => {
+    if (!user) {
+      setAuthRequiredPrompt("Sign in to start autonomous ML training and persist model artifacts.");
+      setShowAuthModal(true);
+      return;
+    }
+
     setIsOrchestrating(true);
     const projName = currentProject ? currentProject.name : "customer-churn-ai";
     
@@ -249,7 +286,7 @@ export default function App() {
       const finishMsg = {
         id: "m_orch_end_" + Date.now(),
         sender: "ai",
-        text: `✓ **Autonomous Pipeline Completed!**\n\n- **Best Model Family**: \`${res.best_candidate?.model_family || 'LinearModel'}\`\n- **Validation ROC-AUC**: \`${res.best_candidate?.cv_metrics_mean?.roc_auc ? res.best_candidate.cv_metrics_mean.roc_auc.toFixed(4) : '0.9867'}\`\n- **Generated 8-file pipeline**: \`${res.generated_files?.join(', ')}\`\n\nAll verified Python files and trained model artifacts have been written to disk.`,
+        text: `✓ **Autonomous Pipeline Completed!**\n\n- **Best Model Family**: \`${res.best_candidate?.model_family || 'LinearModel'}\`\n- **Validation ROC-AUC**: \`${res.best_candidate?.cv_metrics_mean?.roc_auc ? res.best_candidate.cv_metrics_mean.roc_auc.toFixed(4) : '0.9867'}\`\n- **Generated 8-file pipeline**: \`${res.generated_files?.join(', ')}\`\n\nAll verified Python files and trained model artifacts have been saved to your Supabase project.`,
         hasActions: true,
       };
       setActiveThread(prev => ({ ...prev, messages: [...(prev?.messages || []), finishMsg] }));
@@ -272,26 +309,54 @@ export default function App() {
     }
   };
 
+  const handleLogout = () => {
+    AuthAPI.logout();
+    setUser(null);
+  };
+
   // ============================================================
   // 1. LAUNCHER SCREEN (Matching Screenshot 3)
   // ============================================================
   if (!currentProject) {
     return (
-      <LauncherScreen
-        onOpenProject={handleOpenProject}
-        onNewProject={() => setShowNewProjectModal(true)}
-        showNewModal={showNewProjectModal}
-        setShowNewModal={setShowNewProjectModal}
-        onCreateProject={async (data) => {
-          try {
-            const res = await ProjectAPI.create(data);
-            handleOpenProject(res.project_name, res.project_path);
-          } catch (e) {
-            handleOpenProject(data.name, `workspace/${data.name}`);
-          }
-          setShowNewProjectModal(false);
-        }}
-      />
+      <>
+        <LauncherScreen
+          user={user}
+          onOpenProject={handleOpenProject}
+          onNewProject={() => {
+            if (!user) {
+              setAuthRequiredPrompt("Sign in to create and save cloud ML projects.");
+              setShowAuthModal(true);
+            } else {
+              setShowNewProjectModal(true);
+            }
+          }}
+          onOpenAuth={() => setShowAuthModal(true)}
+          onLogout={handleLogout}
+          showNewModal={showNewProjectModal}
+          setShowNewModal={setShowNewProjectModal}
+          onCreateProject={async (data) => {
+            try {
+              const res = await ProjectAPI.create(data);
+              handleOpenProject(res.project_name, res.project_path);
+            } catch (e) {
+              handleOpenProject(data.name, `workspace/${data.name}`);
+            }
+            setShowNewProjectModal(false);
+          }}
+        />
+
+        {showAuthModal && (
+          <AuthModal
+            prompt={authRequiredPrompt}
+            onClose={() => setShowAuthModal(false)}
+            onAuthSuccess={(u) => {
+              setUser(u);
+              setShowAuthModal(false);
+            }}
+          />
+        )}
+      </>
     );
   }
 
@@ -322,6 +387,31 @@ export default function App() {
 
         {/* Right Action Controls */}
         <div className="flex items-center space-x-2.5">
+          {/* User Auth Profile Badge */}
+          {user ? (
+            <div className="flex items-center space-x-2 bg-[#111827] border border-[#1e293b] rounded-full px-2.5 py-0.5 text-[11px] font-mono text-slate-300">
+              <span className="text-[#00f0ff]">●</span>
+              <span className="max-w-[120px] truncate">{user.email}</span>
+              <button
+                onClick={handleLogout}
+                className="text-slate-500 hover:text-rose-400 text-[10px] ml-1"
+                title="Sign Out"
+              >
+                ⏻
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                setAuthRequiredPrompt("Sign in to sync workspaces with Supabase.");
+                setShowAuthModal(true);
+              }}
+              className="px-2.5 py-0.5 rounded bg-[#9333ea] hover:bg-[#a855f7] text-white font-bold text-[11px] transition-all"
+            >
+              Sign In
+            </button>
+          )}
+
           <button className="text-slate-400 hover:text-slate-200 text-sm p-1" title="GPU / Compute Status">⚙</button>
           <button className="text-slate-400 hover:text-slate-200 text-sm p-1" title="Split Editor">◫</button>
           <button className="text-slate-400 hover:text-slate-200 text-sm p-1" title="Settings">🛠</button>
@@ -344,10 +434,6 @@ export default function App() {
           >
             <span>{isOrchestrating ? "◉" : "▶"}</span>
             <span>{isOrchestrating ? "Running..." : "Run"}</span>
-          </button>
-        </div>
-            <span>▶</span>
-            <span>Run</span>
           </button>
         </div>
       </header>
@@ -824,6 +910,18 @@ export default function App() {
         </aside>
 
       </div>
+
+      {/* Auth Modal */}
+      {showAuthModal && (
+        <AuthModal
+          prompt={authRequiredPrompt}
+          onClose={() => setShowAuthModal(false)}
+          onAuthSuccess={(u) => {
+            setUser(u);
+            setShowAuthModal(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -833,7 +931,7 @@ export default function App() {
 // PROJECT LAUNCHER SCREEN (Matching Screenshot 3)
 // ============================================================
 
-function LauncherScreen({ onOpenProject, onNewProject, showNewModal, setShowNewModal, onCreateProject }) {
+function LauncherScreen({ user, onOpenProject, onNewProject, onOpenAuth, onLogout, showNewModal, setShowNewModal, onCreateProject }) {
   const [projName, setProjName] = useState("vision-transformer-v2");
   const [template, setTemplate] = useState("classification");
 
@@ -891,9 +989,31 @@ function LauncherScreen({ onOpenProject, onNewProject, showNewModal, setShowNewM
           </p>
         </div>
 
-        <div className="text-[11px] text-slate-500 font-mono space-y-1">
-          <div>v2024.3.1-stable</div>
-          <div>Runtime: Neural Core Alpha</div>
+        {/* User profile / Auth in Launcher footer */}
+        <div className="space-y-3 pt-6 border-t border-[#162032]">
+          {user ? (
+            <div className="flex items-center justify-between text-xs font-mono text-slate-300">
+              <div className="truncate max-w-[170px]">👤 {user.email}</div>
+              <button
+                onClick={onLogout}
+                className="text-slate-500 hover:text-rose-400 text-[10px]"
+              >
+                Sign Out
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onOpenAuth}
+              className="w-full py-1.5 px-3 rounded bg-[#9333ea] hover:bg-[#a855f7] text-white font-bold text-xs transition-all"
+            >
+              Sign In with Supabase
+            </button>
+          )}
+
+          <div className="text-[11px] text-slate-500 font-mono space-y-0.5">
+            <div>v2024.3.1-stable</div>
+            <div>Runtime: Neural Core Alpha</div>
+          </div>
         </div>
       </div>
 
@@ -1012,6 +1132,166 @@ function LauncherScreen({ onOpenProject, onNewProject, showNewModal, setShowNewM
         </div>
       )}
 
+    </div>
+  );
+}
+
+
+// ============================================================
+// SUPABASE AUTH MODAL COMPONENT
+// ============================================================
+
+function AuthModal({ prompt, onClose, onAuthSuccess }) {
+  const [tab, setTab] = useState("login"); // "login" or "signup"
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!email || !password) {
+      setErrorMsg("Please provide both email and password.");
+      return;
+    }
+    setLoading(true);
+    setErrorMsg("");
+
+    try {
+      if (tab === "login") {
+        const res = await AuthAPI.login(email, password);
+        if (res.user) {
+          onAuthSuccess(res.user);
+        } else {
+          setErrorMsg(res.detail || "Authentication failed.");
+        }
+      } else {
+        const res = await AuthAPI.signup(email, password, fullName);
+        if (res.user) {
+          onAuthSuccess(res.user);
+        } else {
+          setErrorMsg(res.detail || "Sign up failed.");
+        }
+      }
+    } catch (e) {
+      setErrorMsg(e.message || "Network error. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-[#0d131f] border border-[#1a263a] rounded-xl p-6 max-w-md w-full space-y-4 shadow-2xl text-slate-100">
+        
+        {/* Header */}
+        <div className="flex justify-between items-start">
+          <div>
+            <div className="flex items-center space-x-2">
+              <div className="w-6 h-6 rounded bg-[#00f0ff] flex items-center justify-center text-slate-950 font-black text-xs">
+                A
+              </div>
+              <span className="font-bold text-sm tracking-wide font-mono text-white">
+                Supabase Authentication
+              </span>
+            </div>
+            {prompt && <p className="text-[11px] text-slate-400 mt-1">{prompt}</p>}
+          </div>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-300 text-sm">
+            ✕
+          </button>
+        </div>
+
+        {/* Tab Switcher */}
+        <div className="flex border-b border-[#162032]">
+          <button
+            onClick={() => { setTab("login"); setErrorMsg(""); }}
+            className={`flex-1 py-2 text-xs font-mono font-bold transition-all ${
+              tab === "login"
+                ? "text-[#00f0ff] border-b-2 border-[#00f0ff]"
+                : "text-slate-500 hover:text-slate-300"
+            }`}
+          >
+            Sign In
+          </button>
+          <button
+            onClick={() => { setTab("signup"); setErrorMsg(""); }}
+            className={`flex-1 py-2 text-xs font-mono font-bold transition-all ${
+              tab === "signup"
+                ? "text-[#00f0ff] border-b-2 border-[#00f0ff]"
+                : "text-slate-500 hover:text-slate-300"
+            }`}
+          >
+            Create Account
+          </button>
+        </div>
+
+        {/* Error Alert */}
+        {errorMsg && (
+          <div className="p-2.5 rounded bg-rose-500/10 border border-rose-500/30 text-rose-300 text-[11px]">
+            {errorMsg}
+          </div>
+        )}
+
+        {/* Auth Form */}
+        <form onSubmit={handleSubmit} className="space-y-3 font-mono text-xs">
+          {tab === "signup" && (
+            <div>
+              <label className="text-[11px] text-slate-400">Full Name</label>
+              <input
+                type="text"
+                className="w-full mt-1 bg-[#070a10] border border-[#1a263a] rounded p-2 text-xs text-slate-100 outline-none focus:border-[#00f0ff]"
+                placeholder="Ada Lovelace"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+              />
+            </div>
+          )}
+
+          <div>
+            <label className="text-[11px] text-slate-400">Email Address</label>
+            <input
+              type="email"
+              required
+              className="w-full mt-1 bg-[#070a10] border border-[#1a263a] rounded p-2 text-xs text-slate-100 outline-none focus:border-[#00f0ff]"
+              placeholder="engineer@amea.ai"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="text-[11px] text-slate-400">Password</label>
+            <input
+              type="password"
+              required
+              className="w-full mt-1 bg-[#070a10] border border-[#1a263a] rounded p-2 text-xs text-slate-100 outline-none focus:border-[#00f0ff]"
+              placeholder="••••••••••••"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+
+          <div className="pt-2 flex justify-end space-x-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-3 py-1.5 rounded bg-[#162032] hover:bg-[#1e2d42] text-xs text-slate-300"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="px-4 py-1.5 rounded bg-[#00f0ff] hover:bg-[#38bdf8] text-slate-950 font-bold text-xs transition-all disabled:opacity-50"
+            >
+              {loading ? "Authenticating..." : tab === "login" ? "Sign In" : "Sign Up"}
+            </button>
+          </div>
+        </form>
+
+      </div>
     </div>
   );
 }

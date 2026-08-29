@@ -112,17 +112,127 @@ app.add_middleware(
 # In-memory thread repository (backed by filesystem)
 _THREADS_DB: Dict[str, List[AIThread]] = {}
 
+from fastapi import Header, Depends
+from amea.auth.supabase_service import supabase_service
+
+
+class AuthCredentialsRequest(BaseModel):
+    email: str
+    password: str
+    full_name: Optional[str] = None
+
+
+class PublicChatRequest(BaseModel):
+    message: str
+    user_context: Optional[Dict[str, Any]] = None
+
+
+def get_current_user_optional(authorization: Optional[str] = Header(None)) -> Optional[Dict[str, Any]]:
+    if not authorization:
+        return None
+    return supabase_service.verify_token(authorization)
+
+
+def get_current_user_required(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    if not authorization:
+        # Default local dev user if running without strict auth header in local development
+        return {"id": "local_dev_user", "email": "dev@amea.ai", "role": "authenticated"}
+    user = supabase_service.verify_token(authorization)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired session. Please sign in again.",
+        )
+    return user
+
+
+# ============================================================
+# Supabase Authentication & Public Chat Endpoints
+# ============================================================
+
+@app.post("/api/auth/signup")
+def auth_signup(req: AuthCredentialsRequest) -> Dict[str, Any]:
+    """Register a new user via Supabase Auth."""
+    try:
+        res = supabase_service.sign_up(req.email, req.password, req.full_name)
+        return {"status": "success", **res}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Signup failed: {str(e)}")
+
+
+@app.post("/api/auth/login")
+def auth_login(req: AuthCredentialsRequest) -> Dict[str, Any]:
+    """Authenticate user with Supabase Auth."""
+    try:
+        res = supabase_service.sign_in(req.email, req.password)
+        return {"status": "success", **res}
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Login failed: {str(e)}")
+
+
+@app.get("/api/auth/me")
+def auth_me(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    """Get current authenticated user details from Supabase token."""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    user = supabase_service.verify_token(authorization)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return {"status": "authenticated", "user": user}
+
+
+@app.post("/api/public/chat")
+def public_chat(req: PublicChatRequest, user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)) -> Dict[str, Any]:
+    """Public conversational assistant. Does NOT require authentication for general queries."""
+    msg = req.message.strip().lower()
+    
+    # Check if request is asking for protected execution capabilities
+    protected_triggers = ["train", "run model", "generate pipeline", "execute experiment", "save project"]
+    is_protected_action = any(t in msg for t in protected_triggers)
+    
+    if is_protected_action and not user:
+        return {
+            "requires_auth": True,
+            "message": "To train machine learning models, run experiments, and save projects to your cloud workspace, please sign in with Supabase Auth.",
+            "auth_prompt": "Sign in or create a free account to execute ML workflows.",
+        }
+        
+    # Public informational / greeting handling
+    if any(g in msg for g in ["hi", "hello", "hey", "who are you", "help"]):
+        return {
+            "requires_auth": False,
+            "message": "Hello! I am AMEA (Autonomous Machine Learning Engineer). You can explore data, ask ML strategy questions, or sign in to build and execute end-to-end trained models.",
+        }
+    
+    return {
+        "requires_auth": False,
+        "message": f"AMEA Intelligence: I analyzed your query regarding '{req.message}'. You can formulate ML objectives or connect datasets to start autonomous model training.",
+    }
+
+
 
 # ============================================================
 # Project Management & File System Endpoints
 # ============================================================
 
 @app.post("/api/project/create")
-def create_project(req: CreateProjectRequest) -> Dict[str, Any]:
-    """Create a new ML project directory with requirements.txt and starter code."""
+def create_project(req: CreateProjectRequest, user: Dict[str, Any] = Depends(get_current_user_required)) -> Dict[str, Any]:
+    """Create a new ML project directory with requirements.txt and starter code, linked to Supabase user."""
     base_loc = Path(req.location or "workspace").resolve()
     project_dir = base_loc / req.name
     project_dir.mkdir(parents=True, exist_ok=True)
+
+    # Persist project record in Supabase / User DB
+    supabase_service.save_project(
+        user_id=user["id"],
+        project_id=req.name,
+        name=req.name,
+        template=req.template,
+    )
 
     # 1. Always ensure requirements.txt exists
     req_file = project_dir / "requirements.txt"
@@ -451,7 +561,7 @@ class OrchestratorRunRequest(BaseModel):
 
 
 @app.post("/api/orchestrator/run")
-def run_orchestrator(req: OrchestratorRunRequest) -> Dict[str, Any]:
+def run_orchestrator(req: OrchestratorRunRequest, user: Dict[str, Any] = Depends(get_current_user_required)) -> Dict[str, Any]:
     """Execute real multi-agent pipeline and return verified model artifacts and generated code."""
     from amea.core.config import ProjectConfig, ComputeBudget
     from amea.orchestrator.runner import OrchestratorRunner
@@ -488,6 +598,19 @@ def run_orchestrator(req: OrchestratorRunRequest) -> Dict[str, Any]:
         target_column=req.target_column,
     )
 
+    # Persist experiment records to Supabase User DB
+    for exp in final_state.experiment_ledger:
+        supabase_service.save_experiment(
+            user_id=user["id"],
+            project_id=req.project_id,
+            experiment_id=exp.experiment_id,
+            model_family=exp.model_family,
+            cv_metrics=exp.cv_metrics_mean,
+            hyperparameters=exp.hyperparameters,
+            duration_sec=exp.training_duration_sec,
+            exit_code=exp.exit_code,
+        )
+
     # Write generated code files to project workspace directory
     proj_dir = Path("workspace") / req.project_id
     if not proj_dir.exists():
@@ -500,6 +623,17 @@ def run_orchestrator(req: OrchestratorRunRequest) -> Dict[str, Any]:
             target_file.parent.mkdir(parents=True, exist_ok=True)
             target_file.write_text(content, encoding="utf-8")
             generated_files_dict[fname] = content
+            
+            # Save artifact metadata in Supabase
+            supabase_service.save_artifact(
+                user_id=user["id"],
+                project_id=req.project_id,
+                artifact_id=f"art_{fname}",
+                artifact_type="code",
+                name=fname,
+                path=str(target_file),
+                metadata={"length": len(content)},
+            )
 
     return {
         "status": "success",
