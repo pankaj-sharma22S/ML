@@ -84,8 +84,9 @@ class AstSecurityValidator:
 
         try:
             tree = ast.parse(code_str)
-        except SyntaxError as e:
-            return [f"Syntax error during AST parse at line {e.lineno}: {e.msg}"]
+        except SyntaxError:
+            # Let the real Python kernel execute the syntax error to produce authentic traceback
+            return []
 
         for node in ast.walk(tree):
             # 1. Inspect import statements

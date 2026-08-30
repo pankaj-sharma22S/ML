@@ -41,16 +41,12 @@
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
 
-  <!-- Babel Standalone for JSX -->
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-  <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body class="bg-slate-950 text-slate-100 h-screen w-screen overflow-hidden select-none">
   <div id="root" class="h-full w-full"></div>
 
-  <!-- React Application Source -->
-  <script type="text/babel" data-type="module" src="/static/js/app.js"></script>
+  <!-- Application Source (Precompiled) -->
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/bundle.js"></script>
 </body>
 </html>

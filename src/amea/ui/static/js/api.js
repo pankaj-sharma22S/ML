@@ -1,11 +1,12 @@
 /**
  * AMEA Frontend API Client with Supabase Auth Support
+ * Compatible with standard browser script tags and global window scope.
  */
 
 const API_BASE = "";
 
 // Auth token storage in localStorage
-export const TokenStorage = {
+const TokenStorage = {
   get: () => localStorage.getItem("amea_auth_token"),
   set: (token) => localStorage.setItem("amea_auth_token", token),
   clear: () => localStorage.removeItem("amea_auth_token"),
@@ -20,7 +21,7 @@ const getHeaders = (customHeaders = {}) => {
   return headers;
 };
 
-export const AuthAPI = {
+const AuthAPI = {
   signup: async (email, password, full_name = "") => {
     const res = await fetch(`${API_BASE}/api/auth/signup`, {
       method: "POST",
@@ -64,7 +65,7 @@ export const AuthAPI = {
   },
 };
 
-export const ProjectAPI = {
+const ProjectAPI = {
   create: async (data) => {
     const res = await fetch(`${API_BASE}/api/project/create`, {
       method: "POST",
@@ -81,179 +82,187 @@ export const ProjectAPI = {
     });
     return res.json();
   },
-  getTree: async (path) => {
+  getTree: async (path = "") => {
     const res = await fetch(`${API_BASE}/api/project/tree?path=${encodeURIComponent(path)}`, {
       headers: getHeaders(),
     });
     return res.json();
   },
-  readFile: async (project_path, relative_path) => {
-    const res = await fetch(`${API_BASE}/api/project/file/read`, {
+  readFile: async (projectPath, relativePath) => {
+    const res = await fetch(
+      `${API_BASE}/api/project/file?project_path=${encodeURIComponent(projectPath)}&relative_path=${encodeURIComponent(relativePath)}`,
+      { headers: getHeaders() }
+    );
+    return res.json();
+  },
+  writeFile: async (projectPath, relativePath, content) => {
+    const res = await fetch(`${API_BASE}/api/project/file`, {
       method: "POST",
       headers: getHeaders(),
-      body: JSON.stringify({ project_path, relative_path }),
+      body: JSON.stringify({
+        project_path: projectPath,
+        relative_path: relativePath,
+        content: content,
+      }),
     });
     return res.json();
   },
-  writeFile: async (project_path, relative_path, content) => {
-    const res = await fetch(`${API_BASE}/api/project/file/write`, {
-      method: "POST",
-      headers: getHeaders(),
-      body: JSON.stringify({ project_path, relative_path, content }),
-    });
+  deleteFile: async (projectPath, relativePath) => {
+    const res = await fetch(
+      `${API_BASE}/api/project/file?project_path=${encodeURIComponent(projectPath)}&relative_path=${encodeURIComponent(relativePath)}`,
+      {
+        method: "DELETE",
+        headers: getHeaders(),
+      }
+    );
     return res.json();
   },
-  createDir: async (project_path, relative_path) => {
-    const res = await fetch(`${API_BASE}/api/project/file/create-dir`, {
-      method: "POST",
-      headers: getHeaders(),
-      body: JSON.stringify({ project_path, relative_path }),
-    });
-    return res.json();
-  },
-  deleteFile: async (project_path, relative_path) => {
-    const res = await fetch(`${API_BASE}/api/project/file/delete`, {
-      method: "POST",
-      headers: getHeaders(),
-      body: JSON.stringify({ project_path, relative_path }),
-    });
-    return res.json();
-  },
-  getDownloadZipUrl: (project_path) => {
-    return `${API_BASE}/api/project/download-zip?project_path=${encodeURIComponent(project_path)}`;
+  downloadZip: (projectPath) => {
+    window.location.href = `${API_BASE}/api/project/download-zip?project_path=${encodeURIComponent(projectPath)}`;
   },
 };
 
-export const KernelAPI = {
-  createSession: async (session_name) => {
+const KernelAPI = {
+  createSession: async (projectId) => {
     const res = await fetch(`${API_BASE}/api/kernel/session`, {
       method: "POST",
       headers: getHeaders(),
-      body: JSON.stringify({ session_name }),
+      body: JSON.stringify({ project_id: projectId }),
     });
     return res.json();
   },
-  getSession: async (session_id) => {
-    const res = await fetch(`${API_BASE}/api/kernel/session/${session_id}`, {
-      headers: getHeaders(),
-    });
-    return res.json();
-  },
-  executeCell: async (session_id, cell_id, code, cell_type = "CODE") => {
-    const res = await fetch(`${API_BASE}/api/kernel/execute`, {
+  executeCell: async (sessionId, cellId, code) => {
+    const res = await fetch(`${API_BASE}/api/kernel/execute-cell`, {
       method: "POST",
       headers: getHeaders(),
-      body: JSON.stringify({ session_id, cell_id, code, cell_type }),
+      body: JSON.stringify({
+        session_id: sessionId,
+        cell_id: cellId,
+        code: code,
+      }),
     });
     return res.json();
   },
-  executeBatch: async (session_id, cells, stop_on_error = true) => {
-    const res = await fetch(`${API_BASE}/api/kernel/execute-batch`, {
+  restart: async (sessionId) => {
+    const res = await fetch(`${API_BASE}/api/kernel/session/${sessionId}/restart`, {
       method: "POST",
       headers: getHeaders(),
-      body: JSON.stringify({ session_id, cells, stop_on_error }),
     });
     return res.json();
   },
-  interrupt: async (session_id) => {
-    const res = await fetch(`${API_BASE}/api/kernel/interrupt`, {
-      method: "POST",
-      headers: getHeaders(),
-      body: JSON.stringify({ session_id }),
-    });
-    return res.json();
-  },
-  restart: async (session_id) => {
-    const res = await fetch(`${API_BASE}/api/kernel/restart`, {
-      method: "POST",
-      headers: getHeaders(),
-      body: JSON.stringify({ session_id }),
-    });
-    return res.json();
-  },
-  shutdown: async (session_id) => {
-    const res = await fetch(`${API_BASE}/api/kernel/session/${session_id}`, {
+  shutdown: async (sessionId) => {
+    const res = await fetch(`${API_BASE}/api/kernel/session/${sessionId}`, {
       method: "DELETE",
       headers: getHeaders(),
     });
     return res.json();
   },
-};
-
-export const NotebookAPI = {
-  save: async (notebook_path, cells, metadata) => {
-    const res = await fetch(`${API_BASE}/api/kernel/notebook/save`, {
-      method: "POST",
-      headers: getHeaders(),
-      body: JSON.stringify({ notebook_path, cells, metadata }),
-    });
-    return res.json();
-  },
-  load: async (notebook_path) => {
-    const res = await fetch(`${API_BASE}/api/kernel/notebook/load`, {
-      method: "POST",
-      headers: getHeaders(),
-      body: JSON.stringify({ notebook_path }),
-    });
-    return res.json();
-  },
-};
-
-export const ThreadAPI = {
-  list: async (project_id) => {
-    const res = await fetch(`${API_BASE}/api/threads/list?project_id=${encodeURIComponent(project_id)}`, {
-      headers: getHeaders(),
-    });
-    return res.json();
-  },
-  save: async (project_id, thread) => {
-    const res = await fetch(`${API_BASE}/api/threads/save`, {
-      method: "POST",
-      headers: getHeaders(),
-      body: JSON.stringify({ project_id, thread }),
-    });
-    return res.json();
-  },
-  delete: async (project_id, thread_id) => {
-    const res = await fetch(`${API_BASE}/api/threads/delete?project_id=${encodeURIComponent(project_id)}&thread_id=${encodeURIComponent(thread_id)}`, {
-      method: "POST",
+  getStatus: async (sessionId) => {
+    const res = await fetch(`${API_BASE}/api/kernel/session/${sessionId}/status`, {
       headers: getHeaders(),
     });
     return res.json();
   },
 };
 
-export const AIAPI = {
-  generateCell: async (prompt, active_variables) => {
+const NotebookAPI = {
+  save: async (notebookPath, cells) => {
+    const res = await fetch(`${API_BASE}/api/notebook/save`, {
+      method: "POST",
+      headers: getHeaders(),
+      body: JSON.stringify({
+        notebook_path: notebookPath,
+        cells: cells,
+      }),
+    });
+    return res.json();
+  },
+  load: async (notebookPath) => {
+    const res = await fetch(`${API_BASE}/api/notebook/load?path=${encodeURIComponent(notebookPath)}`, {
+      headers: getHeaders(),
+    });
+    return res.json();
+  },
+};
+
+const ThreadAPI = {
+  create: async (title, initialMessage = null) => {
+    const res = await fetch(`${API_BASE}/api/threads/create`, {
+      method: "POST",
+      headers: getHeaders(),
+      body: JSON.stringify({
+        title: title,
+        initial_message: initialMessage,
+      }),
+    });
+    return res.json();
+  },
+  list: async () => {
+    const res = await fetch(`${API_BASE}/api/threads/list`, {
+      headers: getHeaders(),
+    });
+    return res.json();
+  },
+  get: async (threadId) => {
+    const res = await fetch(`${API_BASE}/api/threads/${threadId}`, {
+      headers: getHeaders(),
+    });
+    return res.json();
+  },
+  addMessage: async (threadId, sender, text, structuredOutput = null) => {
+    const res = await fetch(`${API_BASE}/api/threads/${threadId}/messages`, {
+      method: "POST",
+      headers: getHeaders(),
+      body: JSON.stringify({
+        sender: sender,
+        text: text,
+        structured_output: structuredOutput,
+      }),
+    });
+    return res.json();
+  },
+};
+
+const AIAPI = {
+  generateCell: async (prompt, contextCode = "") => {
     const res = await fetch(`${API_BASE}/api/kernel/ai/generate-cell`, {
       method: "POST",
       headers: getHeaders(),
-      body: JSON.stringify({ prompt, active_variables }),
+      body: JSON.stringify({
+        prompt: prompt,
+        context_code: contextCode,
+      }),
     });
     return res.json();
   },
-  interpretResult: async (result) => {
-    const res = await fetch(`${API_BASE}/api/kernel/ai/interpret-result`, {
+  interpretOutput: async (code, outputs) => {
+    const res = await fetch(`${API_BASE}/api/kernel/ai/interpret`, {
       method: "POST",
       headers: getHeaders(),
-      body: JSON.stringify({ result }),
+      body: JSON.stringify({
+        code: code,
+        outputs: outputs,
+      }),
     });
     return res.json();
   },
 };
 
-export const TerminalAPI = {
-  exec: async (project_path, command) => {
+const TerminalAPI = {
+  exec: async (projectPath, command) => {
     const res = await fetch(`${API_BASE}/api/terminal/exec`, {
       method: "POST",
       headers: getHeaders(),
-      body: JSON.stringify({ project_path, command }),
+      body: JSON.stringify({
+        project_path: projectPath,
+        command: command,
+      }),
     });
     return res.json();
   },
 };
 
-export const OrchestratorAPI = {
+const OrchestratorAPI = {
   runTask: async (data) => {
     const res = await fetch(`${API_BASE}/api/orchestrator/run`, {
       method: "POST",
@@ -264,7 +273,7 @@ export const OrchestratorAPI = {
   },
 };
 
-export const EnvironmentAPI = {
+const EnvironmentAPI = {
   getInfo: async () => {
     const res = await fetch(`${API_BASE}/api/environment/info`, {
       headers: getHeaders(),
@@ -272,3 +281,63 @@ export const EnvironmentAPI = {
     return res.json();
   },
 };
+
+const DatasetAPI = {
+  upload: async (file, project_path = "") => {
+    const formData = new FormData();
+    formData.append("file", file);
+    if (project_path) {
+      formData.append("project_path", project_path);
+    }
+    const token = TokenStorage.get();
+    const headers = {};
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    const res = await fetch(`${API_BASE}/api/project/upload-dataset`, {
+      method: "POST",
+      headers: headers,
+      body: formData,
+    });
+    return res.json();
+  },
+};
+
+const LLMAPI = {
+  getStatus: async () => {
+    const res = await fetch(`${API_BASE}/api/llm/status`, {
+      headers: getHeaders(),
+    });
+    return res.json();
+  },
+};
+
+// Expose globally to window
+if (typeof window !== "undefined") {
+  window.TokenStorage = TokenStorage;
+  window.AuthAPI = AuthAPI;
+  window.ProjectAPI = ProjectAPI;
+  window.KernelAPI = KernelAPI;
+  window.NotebookAPI = NotebookAPI;
+  window.ThreadAPI = ThreadAPI;
+  window.AIAPI = AIAPI;
+  window.TerminalAPI = TerminalAPI;
+  window.OrchestratorAPI = OrchestratorAPI;
+  window.EnvironmentAPI = EnvironmentAPI;
+  window.DatasetAPI = DatasetAPI;
+  window.LLMAPI = LLMAPI;
+  window.AMEA_API = {
+    TokenStorage,
+    AuthAPI,
+    ProjectAPI,
+    KernelAPI,
+    NotebookAPI,
+    ThreadAPI,
+    AIAPI,
+    TerminalAPI,
+    OrchestratorAPI,
+    EnvironmentAPI,
+    DatasetAPI,
+    LLMAPI,
+  };
+}

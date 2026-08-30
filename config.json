@@ -1,0 +1,17 @@
+{
+  "pipeline_id": "pipeline_9fb72fac",
+  "task_type": "binary_classification",
+  "target_column": "churn",
+  "primary_metric": "roc_auc",
+  "best_model_family": "RandomForest",
+  "hyperparameters": {
+    "n_estimators": 100,
+    "max_depth": 10,
+    "min_samples_split": 5,
+    "random_state": 42
+  },
+  "training_metrics": {
+    "roc_auc": 0.7479919678714859
+  },
+  "inference_latency_ms": 1.5
+}

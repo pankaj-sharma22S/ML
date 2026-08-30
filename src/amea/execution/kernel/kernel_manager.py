@@ -45,13 +45,14 @@ class KernelManager:
         if sid in self._sessions:
             return self._sessions[sid].session
 
-        workspace_dir = (self.config.base_workspace_dir or Path(".amea_project/sessions")) / sid
-        workspace_dir.mkdir(parents=True, exist_ok=True)
+        workspace_dir = Path(".").resolve()
+        artifact_dir = workspace_dir / ".amea_project" / "sessions" / sid / "artifacts"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
 
         clean_env = EnvironmentSanitizer.sanitize()
 
         km = JupyterKernelManager(kernel_name=self.config.kernel_name)
-        km.start_kernel(cwd=str(workspace_dir.resolve()), env=clean_env)
+        km.start_kernel(cwd=str(workspace_dir), env=clean_env)
         client = km.client()
         client.start_channels()
 

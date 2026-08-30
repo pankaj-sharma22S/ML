@@ -283,6 +283,7 @@ class OrchestratorNodes:
             )
             return apply_state_patch(state, patch)
 
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         from amea.experiments.runner import ExperimentRunner
         from amea.model_specialists.registry import ModelSpecialistRegistry
         from amea.ml_strategy.models import ExperimentSpecification, ModelFamily
@@ -295,19 +296,25 @@ class OrchestratorNodes:
         cleaned_ds = state.data_quality_report.get("cleaned_dataset_path") if state.data_quality_report else None
         dataset_path = cleaned_ds if (cleaned_ds and Path(cleaned_ds).exists()) else (state.data_profile.dataset_path if state.data_profile else "data.csv")
 
-        for exp_config in state.experiment_queue:
+        def run_single_experiment(exp_config) -> RegisteredExperimentRecord:
             # 1. Resolve Model Specialist via Registry
             specialist = registry.get_specialist(exp_config.model_family)
             if not specialist:
                 specialist = registry.get_specialist("LinearModel")
 
+            family_map = {
+                "LinearModel": ModelFamily.LINEAR_MODEL,
+                "RandomForest": ModelFamily.RANDOM_FOREST,
+                "GradientBoosting": ModelFamily.GRADIENT_BOOSTING,
+                "TabularNeuralNet": ModelFamily.TABULAR_NEURAL_NET,
+            }
+            family_enum = family_map.get(exp_config.model_family, ModelFamily.LINEAR_MODEL)
+
             # 2. Build ExperimentSpecification for specialist
             exp_spec = ExperimentSpecification(
                 experiment_id=exp_config.experiment_id,
                 hypothesis=f"Evaluate {exp_config.model_family} capability",
-                model_family=ModelFamily.LINEAR_MODEL if exp_config.model_family == "LinearModel" else (
-                    ModelFamily.RANDOM_FOREST if exp_config.model_family == "RandomForest" else ModelFamily.GRADIENT_BOOSTING
-                ),
+                model_family=family_enum,
                 model_class_name=exp_config.model_class_name,
                 preprocessing_steps=exp_config.preprocessing_steps,
                 hyperparameters=exp_config.hyperparameters,
@@ -325,9 +332,7 @@ class OrchestratorNodes:
             # 4. Experiment Runner executes in isolated workspace
             res = runner.run_experiment(exec_config)
 
-            primary_metric_val = res.cv_metrics_mean.get(state.task_spec.primary_metric, 0.0)
-
-            rec = RegisteredExperimentRecord(
+            return RegisteredExperimentRecord(
                 experiment_id=exp_config.experiment_id,
                 model_family=exp_config.model_family,
                 hyperparameters=exp_config.hyperparameters,
@@ -340,7 +345,16 @@ class OrchestratorNodes:
                 exit_code=res.exit_code,
                 error_message=res.error.message if res.error else None,
             )
-            records.append(rec)
+
+        # Execute candidate models concurrently within compute budget
+        max_workers = min(4, max(1, len(state.experiment_queue)))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [pool.submit(run_single_experiment, exp_cfg) for exp_cfg in state.experiment_queue]
+            for fut in as_completed(futures):
+                records.append(fut.result())
+
+        # Sort records by experiment_id for deterministic ordering
+        records.sort(key=lambda r: r.experiment_id)
 
         patch = StatePatch(
             author_component="ExperimentRunner",
